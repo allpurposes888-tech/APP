@@ -1,9 +1,9 @@
 // Service worker: aplikasi bisa dibuka offline. Naikkan VERSION setiap kali berkas aplikasi berubah.
-const VERSION = 'v1';
+const VERSION = 'v4';
 const CACHE = `gym-hipertrofi-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'ui.js', 'util.js', 'store.js', 'catalog.js', 'device.js',
-  'analysis.js', 'session.js', 'views.js', 'fatigue.js', 'manifest.webmanifest',
+  'analysis.js', 'session.js', 'views.js', 'fatigue.js', 'exdb.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 
@@ -24,7 +24,7 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   const sameOrigin = url.origin === location.origin;
-  const isFont = url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
+  const isFont = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'].includes(url.hostname); // font dan gambar gerakan: cache dulu
   if (!sameOrigin && !isFont) return;
 
   // Berkas aplikasi: coba jaringan dulu agar pembaruan cepat sampai, cadangan dari cache saat offline.

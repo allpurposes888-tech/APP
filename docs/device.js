@@ -3,6 +3,9 @@ import { state } from './store.js';
 
 let ctx = null;
 
+const VOLUME = { pelan: 0.12, sedang: 0.3, keras: 0.6 };
+const level = () => VOLUME[state.settings?.volume] ?? VOLUME.sedang;
+
 /** Harus dipanggil dari ketukan pengguna (aturan iOS) agar bunyi bisa diputar nanti. */
 export function unlockAudio() {
   try {
@@ -15,7 +18,19 @@ export function unlockAudio() {
   }
 }
 
-function tone(freq, startOffset, dur, gain = 0.25) {
+/**
+ * Safari (iOS 16.4+) memperbolehkan menentukan jenis sesi audio. 'transient' dipakai untuk bunyi singkat
+ * yang bercampur dengan musik dan tidak ikut dibisukan tombol senyap. Bila tidak didukung, diabaikan.
+ */
+function sessionType(type) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = type;
+  } catch {
+    /* tidak didukung */
+  }
+}
+
+function tone(freq, startOffset, dur, gain) {
   const t0 = ctx.currentTime + startOffset;
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
@@ -29,14 +44,22 @@ function tone(freq, startOffset, dur, gain = 0.25) {
   osc.stop(t0 + dur + 0.05);
 }
 
-/** Jeda selesai: tiga nada naik. */
-export function beepRestDone() {
-  if (state.settings?.sound !== false && ctx) {
+function ready() {
+  if (!ctx) unlockAudio();
+  if (!ctx) return false;
+  if (ctx.state === 'suspended') ctx.resume();
+  sessionType('transient');
+  return true;
+}
+
+/** Jeda selesai: tiga nada naik, lebih keras dari detik hitung mundur. */
+export function beepRestDone(force = false) {
+  if ((force || state.settings?.sound !== false) && ready()) {
     try {
-      if (ctx.state === 'suspended') ctx.resume();
-      tone(660, 0, 0.16);
-      tone(880, 0.2, 0.16);
-      tone(1175, 0.4, 0.28);
+      const v = level();
+      tone(660, 0, 0.16, v);
+      tone(880, 0.2, 0.16, v);
+      tone(1175, 0.4, 0.3, v);
     } catch {
       /* abaikan */
     }
@@ -46,6 +69,22 @@ export function beepRestDone() {
   } catch {
     /* iOS Safari tidak mendukung getar */
   }
+}
+
+/** Detak pendek untuk 3 detik terakhir jeda. */
+export function tickBeep() {
+  if (state.settings?.sound === false || state.settings?.countdown === false || !ready()) return;
+  try {
+    tone(880, 0, 0.07, level() * 0.7);
+  } catch {
+    /* abaikan */
+  }
+}
+
+/** Dipakai tombol "Tes bunyi" di Pengaturan, agar bunyi bisa dicek dengan tombol senyap menyala. */
+export function testBeep() {
+  unlockAudio();
+  beepRestDone(true);
 }
 
 let lock = null;

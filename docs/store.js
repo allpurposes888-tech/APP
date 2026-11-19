@@ -6,9 +6,11 @@ export const state = {};
 
 export function defaults() {
   return {
-    v: 1,
+    v: 2,
     createdAt: localDate(),
-    settings: { sound: true, wakeLock: true, deloadIntervalWeeks: 6 },
+    settings: { sound: true, volume: 'sedang', countdown: true, wakeLock: true, deloadIntervalWeeks: 6 },
+    setupDone: false,
+    setupHint: false,
     program: defaultProgram(),
     customExercises: [],
     sessions: [],
@@ -51,10 +53,21 @@ async function idbSet(value) {
 }
 
 function migrate(s) {
+  // Pengguna lama (sudah punya sesi) tidak diminta membuat program lagi.
+  if (!('setupDone' in s)) s.setupDone = (s.sessions || []).length > 0 || !!s.active;
   const d = defaults();
   for (const k of Object.keys(d)) if (!(k in s)) s[k] = d[k];
   s.settings = { ...d.settings, ...s.settings };
   s.deload = { ...d.deload, ...s.deload };
+  // v2: jeda bawaan paling lama 2 menit (data lama bisa berisi 2:30 atau 3:00).
+  if ((s.v || 1) < 2) {
+    const cap = (it) => {
+      if (it && it.rest > 120) it.rest = 120;
+    };
+    s.program?.days?.forEach((day) => day.items?.forEach(cap));
+    s.active?.plan?.forEach(cap);
+  }
+  s.v = 2;
   return s;
 }
 

@@ -4,9 +4,10 @@ import { state, save, getExercise } from './store.js';
 import { onMany, rerender, navigate, icon } from './ui.js';
 import { esc, num, fmtClock, fmtStop, uid, localDate, fmtThousands } from './util.js';
 import { planForDay, lastPerf, sessionStats, activeDeload } from './analysis.js';
-import { unlockAudio, beepRestDone, acquireWake, releaseWake } from './device.js';
+import { unlockAudio, beepRestDone, tickBeep, acquireWake, releaseWake } from './device.js';
 
 const A = () => state.active;
+let lastTickKey = null;
 const doneCount = (a, ei) => a.sets.filter((s) => s.ei === ei && s.type === 'working').length;
 
 function initInputs(item) {
@@ -39,7 +40,7 @@ export function addToActive(exId) {
   const lp = lastPerf(exId);
   a.plan.push({
     exId, sets: 3, repMin: ex.compound ? 6 : 10, repMax: ex.compound ? 10 : 15,
-    load: lp ? lp.load : 20, rir: ex.compound ? 2 : 1, rest: ex.compound ? 150 : 90,
+    load: lp ? lp.load : 20, rir: ex.compound ? 2 : 1, rest: ex.compound ? 120 : 90,
   });
   if (a.allDone) {
     a.allDone = false;
@@ -271,6 +272,46 @@ onMany({
     save();
     rerender();
   },
+  'ses-less-set': () => {
+    const a = A();
+    const it = a.plan[a.ei];
+    if (it.sets <= Math.max(1, doneCount(a, a.ei))) return;
+    it.sets -= 1;
+    if (doneCount(a, a.ei) >= it.sets) recomputeProgress(a.ei);
+    save();
+    rerender();
+  },
+  'ses-undo': () => {
+    const a = A();
+    const s = a.sets.pop();
+    if (!s) return;
+    a.ei = s.ei;
+    a.allDone = false;
+    a.inputs = { load: s.load, reps: s.reps };
+    a.sheetSet = null;
+    a.phase = 'ready';
+    a.phaseStart = Date.now();
+    a.lastRestSec = null;
+    save();
+    rerender();
+  },
+  'ses-rm-ex': () => {
+    const a = A();
+    const idx = a.ei;
+    if (a.plan.length <= 1 || doneCount(a, idx) > 0) return;
+    a.plan.splice(idx, 1);
+    a.sets.forEach((t) => {
+      if (t.ei > idx) t.ei -= 1;
+    });
+    if (a.ei >= a.plan.length) {
+      a.ei = a.plan.length - 1;
+      a.allDone = true;
+    } else {
+      a.inputs = initInputs(a.plan[a.ei]);
+    }
+    save();
+    rerender();
+  },
   'ses-skip-ex': () => {
     const a = A();
     if (a.ei < a.plan.length - 1) {
@@ -365,10 +406,15 @@ function stepper(label, valText, minus, plus) {
   </div>`;
 }
 
-function extras() {
+function extras(a) {
+  const canLess = a.plan[a.ei].sets > Math.max(1, doneCount(a, a.ei));
+  const canRm = a.plan.length > 1 && doneCount(a, a.ei) === 0;
   return `<div class="extras">
+    <button class="btn-link" data-act="ses-less-set" ${canLess ? '' : 'disabled'}>− Set</button>
     <button class="btn-link" data-act="ses-add-set">+ Set</button>
+    ${a.sets.length ? '<button class="btn-link" data-act="ses-undo">Urungkan set</button>' : ''}
     <button class="btn-link" data-act="ses-skip-ex">Lewati latihan</button>
+    <button class="btn-link danger" data-act="ses-rm-ex" ${canRm ? '' : 'disabled'}>Hapus gerakan</button>
     <button class="btn-link" data-act="ses-add-ex">+ Gerakan</button>
   </div>`;
 }
@@ -386,7 +432,7 @@ function readyView(a, it, ex) {
   const dl = activeDeload();
   return `<section class="ses">
     ${top(a)}
-    <div class="ses-ex"><div class="muted-s">Latihan ${a.ei + 1} dari ${a.plan.length}${dl ? ' · deload aktif' : ''}</div>
+    <div class="ses-ex"><div class="muted-s">Latihan ${a.ei + 1} dari ${a.plan.length}${dl ? ' · deload aktif' : ''} · <button class="btn-link inline" data-act="nav" data-to="#/ex/${encodeURIComponent(it.exId)}">Lihat gerakan</button></div>
       <h1 class="ex-title">${esc(ex.name)}</h1></div>
     ${pills(a, it)}
     <div class="infocard">
@@ -402,7 +448,7 @@ function readyView(a, it, ex) {
         : `<button class="btn-big work" data-act="ses-start-set">${icon('play', 28)} MULAI SET ${done + 1}</button>
            <button class="btn-ghost" data-act="ses-quick">✓ Catat tanpa timer</button>`
     }
-    ${extras()}
+    ${extras(a)}
   </section>`;
 }
 
@@ -479,7 +525,7 @@ function restView(a, it, ex) {
                 : `<button class="btn-big work" data-act="ses-start-set">${icon('play', 28)} MULAI SET ${done + 1}</button>
                    <button class="btn-ghost" data-act="ses-quick">✓ Catat tanpa timer</button>`
             }
-            ${extras()}
+            ${extras(a)}
           </div>`
     }
   </section>`;
@@ -559,6 +605,14 @@ export function tick() {
     tm.classList.toggle('over', left < 0);
     const bar = document.getElementById('tbar');
     if (bar) bar.style.width = Math.min(100, (el / a.restTarget) * 100) + '%';
+    const sLeft = Math.ceil(left);
+    if (left > 0 && sLeft <= 3) {
+      const k = a.phaseStart + ':' + sLeft;
+      if (k !== lastTickKey) {
+        lastTickKey = k;
+        if (document.visibilityState === 'visible') tickBeep();
+      }
+    }
     if (left <= 0 && !a.restBeeped) {
       a.restBeeped = true;
       save();

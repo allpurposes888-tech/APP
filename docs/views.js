@@ -1,7 +1,8 @@
 // Layar selain sesi aktif: Hari Ini, Check-in, Program, Pilih gerakan, Riwayat, Fatigue, Pengaturan.
 import * as F from './fatigue.js';
 import { state, save, getExercise, allExercises, exportJson, importJson, flush, replaceState, defaults } from './store.js';
-import { CATALOG, GROUPS, EQUIPMENT, MUSCLE_NAMES, defaultProgram } from './catalog.js';
+import { CATALOG, GROUPS, EQUIPMENT, MUSCLE_NAMES, defaultProgram, TEMPLATES, programFromTemplate, imgUrl } from './catalog.js';
+import { testBeep } from './device.js';
 import { onMany, navigate, rerender, icon } from './ui.js';
 import {
   esc, num, fmtClock, fmtThousands, fmtDurationMin, localDate, addDaysStr, dayShort, dayLong, weekStart, uid, mean,
@@ -15,13 +16,24 @@ const bar = (title, sub, back = true) => `<div class="page-h">${
   back ? `<button class="icon-btn" data-act="back" aria-label="Kembali">${icon('back', 20)}</button>` : ''
 }<div><div class="muted-s">${sub || ''}</div><h1 class="h1">${title}</h1></div></div>`;
 
-export function toast(msg) {
+export function toast(msg, action) {
   const el = document.createElement('div');
   el.className = 'toast';
-  el.textContent = msg;
+  el.append(document.createTextNode(msg));
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-act';
+    b.textContent = action.label;
+    b.addEventListener('click', () => {
+      action.fn();
+      el.remove();
+    });
+    el.append(b);
+  }
   document.body.appendChild(el);
-  setTimeout(() => el.classList.add('hide'), 2600);
-  setTimeout(() => el.remove(), 3100);
+  const life = action ? 5200 : 2600;
+  setTimeout(() => el.classList.add('hide'), life);
+  setTimeout(() => el.remove(), life + 500);
 }
 
 function level(score) {
@@ -48,6 +60,22 @@ export function nextDay() {
   if (!days.length) return null;
   const i = days.findIndex((d) => d.id === state.lastDayId);
   return days[(i + 1) % days.length];
+}
+
+/** Layar tombol Latih (tengah): pilih hari, yang berikutnya diberi tanda. */
+export function startView() {
+  const next = nextDay();
+  const days = state.program.days;
+  return {
+    nav: 'latih',
+    html: `<section class="page">
+      ${bar('Mulai latihan', 'Pilih hari latihan', false)}
+      ${days.map((d) => `<button class="card tap" data-act="ses-begin" data-day="${d.id}">
+        <div class="card-h"><b>${esc(d.name)}</b>${next && next.id === d.id ? '<span class="pr">Berikutnya</span>' : ''}</div>
+        <div class="muted-s">${d.items.length} latihan · ${d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ')}${d.items.length > 3 ? ' …' : ''}</div></button>`).join('')}
+      ${days.length ? '' : '<div class="empty"><h2>Program kosong</h2><p>Tambahkan hari latihan dulu.</p><button class="btn-primary" data-act="nav" data-to="#/program">Buka Program</button></div>'}
+    </section>`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -167,14 +195,31 @@ export function checkinView() {
 
 export function programView() {
   const days = state.program.days;
+  const hint = state.setupHint;
   return {
-    nav: 'program',
+    nav: hint ? null : 'program',
     html: `<section class="page">
       ${bar('Program', esc(state.program.name), false)}
+      ${hint ? `<div class="banner soft"><div><b>Sesuaikan gerakanmu</b><div class="muted-s">Ketuk satu hari untuk menambah, menghapus, atau mengurutkan gerakan. Beban awal hanya tebakan, sesuaikan sebelum latihan pertama.</div></div></div>` : ''}
       ${days.map((d) => `<button class="card tap" data-act="nav" data-to="#/day/${d.id}"><div class="card-h"><b>${esc(d.name)}</b><span class="muted-s">${d.items.length} latihan ›</span></div>
-        <div class="muted-s">${d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ')}${d.items.length > 3 ? ' …' : ''}</div></button>`).join('')}
+        <div class="muted-s">${d.items.length ? d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ') + (d.items.length > 3 ? ' …' : '') : 'Belum ada gerakan. Ketuk untuk menambah.'}</div></button>`).join('')}
       <button class="btn-ghost" data-act="day-add">+ Tambah hari</button>
-      <p class="tiny">Beban awal di program hanya tebakan. Sesuaikan lewat menu ini sebelum latihan pertama.</p>
+      ${hint ? '<div class="grow"></div><button class="btn-primary" data-act="setup-done">SELESAI, MULAI LATIHAN</button>' : '<button class="btn-ghost" data-act="nav" data-to="#/setup">Ganti program (pilih kerangka lain)</button>'}
+    </section>`,
+  };
+}
+
+export function setupView() {
+  const first = !state.setupDone;
+  return {
+    nav: null,
+    html: `<section class="page">
+      ${first
+        ? '<div class="page-h"><div><div class="muted-s">Langkah pertama</div><h1 class="h1">Buat program latihan</h1></div></div>'
+        : bar('Ganti program', 'Riwayat latihan tidak dihapus')}
+      <p class="muted-s">Pilih kerangka dulu. Di langkah berikutnya Anda bisa menambah, menghapus, dan mengurutkan gerakan tiap hari.</p>
+      ${TEMPLATES.map((t) => `<button class="card tap" data-act="setup-pick" data-id="${t.id}"><div class="card-h"><b>${esc(t.name)}</b><span class="muted-s">${t.id === 'kosong' ? '' : t.build().length + ' hari'}</span></div><div class="muted-s">${esc(t.desc)}</div></button>`).join('')}
+      ${first ? '<button class="btn-link" data-act="setup-skip">Lewati, pakai program bawaan</button>' : ''}
     </section>`,
   };
 }
@@ -192,7 +237,8 @@ export function dayView(id) {
         return `<div class="card item"><button class="item-main" data-act="nav" data-to="#/item/${day.id}/${i}"><b>${esc(ex.name)}</b>
           <span class="muted-s">${it.sets}×${it.repMin}–${it.repMax} · ${num(it.load)} kg · RIR ${it.rir} · jeda ${fmtClock(it.rest)}</span></button>
           <div class="item-ctl"><button class="icon-btn sm" data-act="item-move" data-day="${day.id}" data-i="${i}" data-d="-1" aria-label="Naik" ${i === 0 ? 'disabled' : ''}>${icon('up', 18)}</button>
-          <button class="icon-btn sm" data-act="item-move" data-day="${day.id}" data-i="${i}" data-d="1" aria-label="Turun" ${i === day.items.length - 1 ? 'disabled' : ''}>${icon('down', 18)}</button></div></div>`;
+          <button class="icon-btn sm" data-act="item-move" data-day="${day.id}" data-i="${i}" data-d="1" aria-label="Turun" ${i === day.items.length - 1 ? 'disabled' : ''}>${icon('down', 18)}</button>
+          <button class="icon-btn sm del" data-act="item-rm" data-day="${day.id}" data-i="${i}" aria-label="Hapus ${esc(ex.name)}">${icon('trash', 18)}</button></div></div>`;
       }).join('')}
       <button class="btn-ghost" data-act="nav" data-to="#/pick/day:${day.id}">+ Tambah gerakan</button>
       <button class="btn-link danger" data-act="day-del" data-day="${day.id}">${pendingDel === day.id ? 'Ketuk lagi untuk menghapus hari ini' : 'Hapus hari'}</button>
@@ -227,6 +273,7 @@ export function itemView(dayId, idx) {
       </div>
       <div class="q"><div class="q-t">RIR target</div><div class="seg5">${[0, 1, 2, 3, 4].map((v) => `<button class="seg-b ${it.rir === v ? 'sel' : ''}" data-act="it-rir" data-day="${dayId}" data-i="${idx}" data-v="${v}">${v}</button>`).join('')}</div></div>
       <div class="q"><div class="q-t">Otot yang dihitung</div><div class="chips-row wrap">${ex.muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} · ${num(m.weight)}</span>`).join('') || '<span class="muted-s">-</span>'}</div></div>
+      <button class="btn-ghost" data-act="nav" data-to="#/ex/${encodeURIComponent(ex.id)}">Lihat gambar gerakan</button>
       <div class="grow"></div>
       <button class="btn-primary" data-act="back">SELESAI</button>
       <button class="btn-link danger" data-act="item-del" data-day="${dayId}" data-i="${idx}">Hapus gerakan dari hari ini</button>
@@ -247,26 +294,38 @@ function pickItems() {
   const q = pk.q.trim().toLowerCase();
   const grp = GROUPS.find((g) => g.id === pk.group);
   return allExercises()
-    .filter((e) => (!q || e.name.toLowerCase().includes(q)))
+    .filter((e) => !q || q.split(/\s+/).every((t) => hay(e).includes(t)))
     .filter((e) => !grp || e.muscles.some((m) => grp.muscles.includes(m.muscleId) && m.weight >= 1))
     .filter((e) => !pk.equip || e.equip === pk.equip)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => Number(!!b.core) - Number(!!a.core) || a.name.localeCompare(b.name));
+}
+
+const hay = (e) =>
+  `${e.name} ${e.equip} ${e.muscles.map((m) => MUSCLE_NAMES[m.muscleId] || '').join(' ')}`.toLowerCase();
+
+function thumb(e, cls = '') {
+  const u = imgUrl(e, 0);
+  return u ? `<img class="${cls}" src="${u}" crossorigin="anonymous" loading="lazy" decoding="async" alt="" onerror="this.remove()">` : '';
 }
 
 function pickList() {
   const items = pickItems();
   if (!items.length) return '<div class="empty small">Tidak ada gerakan yang cocok.</div>';
-  return items
-    .map((e) => {
-      const lp = lastPerf(e.id);
-      const sel = pk.sel.has(e.id);
-      const sub = e.muscles.map((m) => MUSCLE_NAMES[m.muscleId] || m.muscleId).join(', ');
-      return `<button class="pk ${sel ? 'sel' : ''}" data-act="pk-toggle" data-id="${esc(e.id)}">
-        <span class="pk-ic">${esc((e.equip || '??').slice(0, 2).toUpperCase())}</span>
-        <span class="pk-t"><b>${esc(e.name)}</b><span class="muted-s">${esc(e.equip)} · ${esc(sub)}${lp ? ` · terakhir ${num(lp.load)} kg × ${lp.reps}` : ' · belum pernah'}</span></span>
-        <span class="pk-c">${sel ? '✓' : ''}</span></button>`;
-    })
-    .join('');
+  return (
+    `<div class="muted-s pk-count">${items.length} gerakan${pk.q || pk.group !== 'all' || pk.equip ? ' cocok' : ''}</div>` +
+    items
+      .map((e) => {
+        const lp = lastPerf(e.id);
+        const sel = pk.sel.has(e.id);
+        const sub = e.muscles.map((m) => MUSCLE_NAMES[m.muscleId] || m.muscleId).join(', ');
+        return `<div class="pkrow"><button class="pk ${sel ? 'sel' : ''}" data-act="pk-toggle" data-id="${esc(e.id)}">
+        <span class="pk-ic">${esc((e.equip || '??').slice(0, 2).toUpperCase())}${thumb(e)}</span>
+        <span class="pk-t"><b>${esc(e.name)}</b><span class="muted-s">${esc(e.equip)} · ${esc(sub)}${lp ? ` · terakhir ${num(lp.load)} kg × ${lp.reps}` : ''}</span></span>
+        <span class="pk-c">${sel ? '✓' : ''}</span></button>
+        <button class="pk-i" data-act="nav" data-to="#/ex/${encodeURIComponent(e.id)}" aria-label="Lihat gerakan ${esc(e.name)}">i</button></div>`;
+      })
+      .join('')
+  );
 }
 
 export function pickView(mode) {
@@ -295,6 +354,27 @@ export function pickView(mode) {
           : `<button class="btn-ghost dashed" data-act="pk-custom">+ Buat gerakan kustom</button>`
       }
       <button class="btn-primary" id="pkadd" data-act="pk-add" data-mode="${esc(mode)}" ${pk.sel.size ? '' : 'disabled'}>TAMBAH ${pk.sel.size || ''} GERAKAN</button>
+    </section>`,
+  };
+}
+
+const LEVEL = { beginner: 'Pemula', intermediate: 'Menengah', expert: 'Lanjut' };
+
+export function exDetailView(id) {
+  const ex = getExercise(id);
+  const lp = lastPerf(ex.id);
+  const a = imgUrl(ex, 0);
+  const b = imgUrl(ex, 1);
+  const fig = (u, cap) => `<figure><img src="${u}" crossorigin="anonymous" alt="${cap} ${esc(ex.name)}" onerror="this.closest('figure').classList.add('broken')"><figcaption>${cap}</figcaption></figure>`;
+  return {
+    nav: null,
+    html: `<section class="page">
+      ${bar(esc(ex.name), esc(ex.equip || 'Gerakan'))}
+      ${a ? `<div class="imgs">${fig(a, 'Posisi awal')}${fig(b, 'Posisi akhir')}</div>` : '<div class="card muted-s">Gerakan kustom belum punya gambar.</div>'}
+      <div class="q"><div class="q-t">Otot yang dihitung</div><div class="chips-row wrap">${ex.muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} · ${m.weight >= 1 ? 'utama' : 'bantu'}</span>`).join('') || '<span class="muted-s">-</span>'}</div></div>
+      <div class="infocard"><div><div class="k">TIPE</div><div>${ex.compound ? 'Compound' : 'Isolasi'}${ex.level ? ' · ' + (LEVEL[ex.level] || ex.level) : ''}</div></div>
+        <div class="r"><div class="k">TERAKHIR</div><div>${lp ? `${num(lp.load)} kg × ${lp.reps}` : 'belum pernah'}</div></div></div>
+      ${a ? '<p class="tiny">Gambar dari Free Exercise DB (domain publik) dan dimuat dari internet saat dibuka. Yang sudah pernah dilihat tersimpan untuk dibuka tanpa sinyal.</p>' : ''}
     </section>`,
   };
 }
@@ -512,7 +592,11 @@ export function settingsView() {
     html: `<section class="page">${bar('Pengaturan', 'Gym Hipertrofi')}
       ${isIos() && !isStandalone() ? `<div class="banner soft"><div><b>Pasang ke Layar Utama</b><div class="muted-s">Di Safari ketuk tombol Bagikan, lalu Tambah ke Layar Utama. Data lebih awet dan aplikasi jalan layar penuh.</div></div></div>` : ''}
       <div class="card tight">
-        ${sw('sound', 'Bunyi saat jeda selesai', 'Mengikuti tombol senyap iPhone')}
+        ${sw('sound', 'Bunyi saat jeda selesai', 'Mungkin dibisukan tombol senyap iPhone')}
+        <div class="srow"><div><div>Volume bunyi</div><div class="muted-s">Untuk bunyi jeda selesai</div></div>
+          <div class="seg3">${['pelan', 'sedang', 'keras'].map((v) => `<button class="${s.volume === v ? 'sel' : ''}" data-act="set-volume" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div></div>
+        ${sw('countdown', 'Detak 3 detik terakhir', 'Tiga bunyi pendek sebelum jeda habis')}
+        <div class="srow"><div><div>Tes bunyi</div><div class="muted-s">Coba dengan tombol senyap menyala dan mati</div></div><button class="btn-sm" data-act="sound-test">Putar</button></div>
         ${sw('wakeLock', 'Jaga layar tetap menyala saat sesi', 'Agar timer dan bunyi tetap berjalan')}
         <div class="srow"><div><div>Jadwal deload proaktif</div><div class="muted-s">Tiap berapa minggu (4–8)</div></div>
           <div class="stp-row"><button class="sb" data-act="set-interval" data-d="-1" aria-label="Kurangi">−</button><span class="stp-val sm">${s.deloadIntervalWeeks}</span><button class="sb" data-act="set-interval" data-d="1" aria-label="Tambah">+</button></div></div>
@@ -563,11 +647,53 @@ function newItemFor(exId) {
   const lp = lastPerf(exId);
   return {
     exId, sets: 3, repMin: ex.compound ? 6 : 10, repMax: ex.compound ? 10 : 15,
-    load: lp ? lp.load : 20, rir: ex.compound ? 2 : 1, rest: ex.compound ? 150 : 90,
+    load: lp ? lp.load : 20, rir: ex.compound ? 2 : 1, rest: ex.compound ? 120 : 90,
   };
 }
 
 onMany({
+  'setup-pick': (el) => {
+    state.program = programFromTemplate(el.dataset.id);
+    state.lastDayId = null;
+    state.setupDone = true;
+    state.setupHint = true;
+    save();
+    navigate('#/program');
+  },
+  'setup-skip': () => {
+    state.setupDone = true;
+    state.setupHint = false;
+    save();
+    navigate('#/today');
+  },
+  'setup-done': () => {
+    state.setupHint = false;
+    save();
+    navigate('#/today');
+  },
+  'item-rm': (el) => {
+    const d = dayById(el.dataset.day);
+    const i = Number(el.dataset.i);
+    if (!d || !d.items[i]) return;
+    const [removed] = d.items.splice(i, 1);
+    save();
+    rerender();
+    toast(`${getExercise(removed.exId).name} dihapus`, {
+      label: 'Urungkan',
+      fn: () => {
+        d.items.splice(i, 0, removed);
+        save();
+        rerender();
+      },
+    });
+  },
+  'set-volume': (el) => {
+    state.settings.volume = el.dataset.v;
+    save();
+    rerender();
+    testBeep();
+  },
+  'sound-test': () => testBeep(),
   'go-today': () => navigate('#/today'),
   'ses-begin': (el) => startSession(el.dataset.day),
   'ci-set': (el) => {

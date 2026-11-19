@@ -263,6 +263,45 @@ input, select { font-family: inherit; font-size: 16px; color: var(--txt); }
 .toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 96px); transform: translateX(-50%); background: var(--txt); color: var(--bg); padding: 12px 18px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 50; max-width: 86vw; text-align: center; transition: opacity 0.4s; }
 .toast.hide { opacity: 0; }
 
+.icon-btn.del { color: var(--bad); }
+.seg3 { display: flex; gap: 4px; }
+.seg3 button { min-height: 40px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surf2); font-size: 12px; color: var(--mut2); }
+.seg3 button.sel { border: 2px solid var(--acc); background: rgba(255, 122, 69, 0.14); color: var(--acc); font-weight: 700; }
+.toast { display: flex; align-items: center; gap: 12px; }
+.toast-act { min-height: 36px; padding: 0 12px; border-radius: 8px; border: 0; background: var(--acc); color: var(--on-acc); font-weight: 700; font-size: 13px; }
+
+/* Umpan balik sentuhan dan animasi */
+button, .card, .pk, .mrow { transition: transform 0.09s ease, filter 0.12s ease, background-color 0.18s ease, border-color 0.18s ease, opacity 0.18s ease; }
+button:active:not(:disabled) { transform: scale(0.95); filter: brightness(1.18); }
+.btn-big:active:not(:disabled), .btn-stop:active:not(:disabled) { transform: scale(0.975); }
+.card.tap:active, .pk:active, .mrow:active { transform: scale(0.985); background-color: var(--surf2); }
+.nv:active:not(:disabled) .orb { transform: scale(0.9); }
+.orb { transition: transform 0.09s ease; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+@keyframes pop { 0% { transform: scale(0.86); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+@keyframes pulseDone { 0% { box-shadow: 0 0 0 0 rgba(111, 168, 255, 0.55); } 100% { box-shadow: 0 0 0 28px rgba(111, 168, 255, 0); } }
+.screen.enter .page, .screen.enter .ses { animation: fadeUp 0.24s ease-out; }
+.screen.enter .sheet { animation: slideUp 0.26s ease-out; }
+.stp-val { animation: pop 0.2s ease-out; }
+.tmr-wrap.flash { animation: pulseDone 0.7s ease-out; }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Gambar gerakan */
+.pkrow { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.pkrow .pk { border-bottom: 0; flex: 1; min-width: 0; width: auto; }
+.pk-i { width: 40px; height: 40px; flex: none; border-radius: 50%; border: 1px solid var(--line2); background: none; color: var(--mut2); font-family: Georgia, serif; font-style: italic; font-weight: 700; font-size: 16px; }
+.pk-ic { position: relative; overflow: hidden; }
+.pk-ic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #fff; }
+.pk-count { padding: 8px 0 6px; }
+.imgs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.imgs figure { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.imgs img { width: 100%; height: auto; display: block; border-radius: 12px; background: #fff; aspect-ratio: 3 / 2; object-fit: cover; }
+.imgs figcaption { font-size: 12px; color: var(--mut); text-align: center; }
+.imgs figure.broken img { visibility: hidden; }
+.imgs figure.broken::before { content: 'Gambar belum termuat. Cek koneksi internet.'; font-size: 12px; color: var(--mut); padding: 24px 8px; text-align: center; border: 1px dashed var(--line2); border-radius: 12px; }
+.btn-link.inline { min-height: 0; padding: 0; display: inline; font-size: 12px; color: var(--acc); text-decoration: underline; }

@@ -10,7 +10,8 @@ Data tersimpan di perangkat (IndexedDB), tanpa server dan tanpa akun. Estimasi f
 | `docs/` | Aplikasi web yang dipublikasikan (HTML, CSS, JS murni, tanpa build). |
 | `fatigue.ts`, `fatigue.test.ts` | Sumber engine fatigue dan deload beserta 30 tes. |
 | `docs/fatigue.js` | Hasil konversi `fatigue.ts` untuk browser. Jangan diedit tangan. |
-| `tools/` | Skrip pembuat `fatigue.js` dan ikon. |
+| `docs/exdb.js` | Daftar 477 gerakan (hasil `tools/build-exdb.mjs`). Jangan diedit tangan. |
+| `tools/` | Skrip pembuat `fatigue.js`, `exdb.js`, dan ikon. |
 | `DESAIN_APP_GYM_HIPERTROFI.md` | Dokumen desain lengkap. |
 
 ## Menjalankan di komputer
@@ -45,3 +46,9 @@ Naikkan `VERSION` di `docs/sw.js` setiap kali berkas aplikasi berubah agar cache
 - Layar dijaga tetap menyala selama sesi (Screen Wake Lock) agar timer dan bunyi tetap berjalan.
 - Bunyi jeda selesai mengikuti tombol senyap iPhone. Safari di iPhone tidak mendukung getar.
 - Buat cadangan lewat Pengaturan, Ekspor cadangan. Safari dapat menghapus data situs yang lama tidak dibuka.
+
+## Sumber data gerakan
+
+Daftar gerakan dan fotonya berasal dari [Free Exercise DB](https://github.com/yuhonas/free-exercise-db) (lisensi Unlicense, domain publik).
+Hanya metadata ringkas yang disimpan di repositori. Foto dimuat dari CDN jsDelivr saat dilihat, lalu di-cache service worker.
+Untuk memperbarui daftar, unduh `dist/exercises.json` dari repositori itu lalu jalankan `node tools/build-exdb.mjs <jalur-berkas>`.

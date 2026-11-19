@@ -4,8 +4,11 @@ import { setRenderer, rerender, navigate, onMany, root, icon } from './ui.js';
 import { sessionView, tick, startSession } from './session.js';
 import {
   todayView, checkinView, programView, dayView, itemView, pickView, historyView, histExView, summaryView,
-  fatigueView, settingsView, resetDrafts, nextDay,
+  fatigueView, settingsView, startView, setupView, exDetailView, resetDrafts,
 } from './views.js';
+
+// iOS Safari hanya menampilkan gaya :active bila ada pendengar sentuhan di dokumen.
+document.addEventListener('touchstart', () => {}, { passive: true });
 
 function parse() {
   const h = location.hash.replace(/^#\/?/, '') || 'today';
@@ -28,6 +31,9 @@ function view() {
     case 'session': return sessionView();
     case 'fatigue': return fatigueView();
     case 'settings': return settingsView();
+    case 'start': return startView();
+    case 'setup': return setupView();
+    case 'ex': return exDetailView(decodeURIComponent(p[0]));
     default: return todayView();
   }
 }
@@ -38,7 +44,7 @@ function navHtml(active) {
   return `<nav class="nav" aria-label="Navigasi utama">
     ${item('today', 'home', 'Hari Ini')}
     ${item('program', 'list', 'Program')}
-    <button class="nv center" data-act="nav-latih" aria-label="Latih"><span class="orb">${icon('play', 22)}</span><span>Latih</span></button>
+    <button class="nv center ${active === 'latih' ? 'on' : ''}" data-act="nav-latih" aria-label="Latih"><span class="orb">${icon('play', 22)}</span><span>Latih</span></button>
     ${item('history', 'clock', 'Riwayat')}
     ${item('fatigue', 'pulse', 'Fatigue')}
   </nav>`;
@@ -46,6 +52,14 @@ function navHtml(active) {
 
 let lastName = null;
 let lastHash = null;
+let lastKey = null;
+
+/** Kunci "layar" untuk animasi masuk: berubah saat rute atau fase sesi berganti, bukan saat angka diubah. */
+function screenKey() {
+  const a = state.active;
+  const sess = location.hash.startsWith('#/session') && a ? `:${a.phase}:${a.finishing ? 'f' : ''}${a.sheetSet ? 's' : ''}` : '';
+  return location.hash + sess;
+}
 
 function render() {
   try {
@@ -58,7 +72,10 @@ function render() {
     const prev = document.getElementById('screen');
     const keep = sameRoute && prev ? prev.scrollTop : 0;
     const v = view();
-    root.innerHTML = `<main class="screen ${v.nav ? '' : 'nonav'}" id="screen">${v.html}</main>${v.nav ? navHtml(v.nav) : ''}`;
+    const key = screenKey();
+    const enter = key !== lastKey;
+    lastKey = key;
+    root.innerHTML = `<main class="screen ${v.nav ? '' : 'nonav'} ${enter ? 'enter' : ''}" id="screen">${v.html}</main>${v.nav ? navHtml(v.nav) : ''}`;
     document.getElementById('screen').scrollTop = keep;
     lastHash = location.hash;
   } catch (e) {
@@ -76,7 +93,7 @@ onMany({
   },
   'nav-latih': () => {
     if (state.active) navigate('#/session');
-    else navigate('#/today');
+    else navigate('#/start');
   },
 });
 
@@ -84,7 +101,9 @@ async function boot() {
   await load();
   setRenderer(render);
   addEventListener('hashchange', render);
-  if (state.active && (!location.hash || location.hash === '#/today')) location.hash = '#/session';
+  const atHome = !location.hash || location.hash === '#/today';
+  if (state.active && atHome) location.hash = '#/session';
+  else if (!state.setupDone && atHome) location.hash = '#/setup';
   render();
   setInterval(tick, 250);
   try {
