@@ -1,0 +1,818 @@
+// Layar selain sesi aktif: Hari Ini, Check-in, Program, Pilih gerakan, Riwayat, Fatigue, Pengaturan.
+import * as F from './fatigue.js';
+import { state, save, getExercise, allExercises, exportJson, importJson, flush, replaceState, defaults } from './store.js';
+import { CATALOG, GROUPS, EQUIPMENT, MUSCLE_NAMES, defaultProgram } from './catalog.js';
+import { onMany, navigate, rerender, icon } from './ui.js';
+import {
+  esc, num, fmtClock, fmtThousands, fmtDurationMin, localDate, addDaysStr, dayShort, dayLong, weekStart, uid, mean,
+} from './util.js';
+import {
+  analyzeAt, hasTrainingData, activeDeload, lastPerf, sessionStats, sessionPRs, sessionsDesc, e1rmOf,
+} from './analysis.js';
+import { startSession, addToActive } from './session.js';
+
+const bar = (title, sub, back = true) => `<div class="page-h">${
+  back ? `<button class="icon-btn" data-act="back" aria-label="Kembali">${icon('back', 20)}</button>` : ''
+}<div><div class="muted-s">${sub || ''}</div><h1 class="h1">${title}</h1></div></div>`;
+
+export function toast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.classList.add('hide'), 2600);
+  setTimeout(() => el.remove(), 3100);
+}
+
+function level(score) {
+  if (score >= 70) return { label: 'Tinggi', cls: 'bad' };
+  if (score >= 55) return { label: 'Meningkat', cls: 'warn' };
+  if (score >= 35) return { label: 'Sedang', cls: 'good' };
+  return { label: 'Rendah', cls: 'good' };
+}
+
+function spark(values, { threshold = null, w = 352, h = 70, min = null, max = null } = {}) {
+  if (values.length < 2) return '';
+  const lo = min ?? Math.min(...values, threshold ?? Infinity) - 5;
+  const hi = max ?? Math.max(...values, threshold ?? -Infinity) + 5;
+  const x = (i) => 8 + (i * (w - 16)) / (values.length - 1);
+  const y = (v) => h - 6 - ((v - lo) / (hi - lo || 1)) * (h - 12);
+  const d = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
+  const th = threshold !== null ? `<line x1="0" y1="${y(threshold).toFixed(1)}" x2="${w}" y2="${y(threshold).toFixed(1)}" class="sp-th"/>` : '';
+  const last = values.length - 1;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Grafik tren">${th}<path d="${d}" class="sp-line"/><circle cx="${x(last).toFixed(1)}" cy="${y(values[last]).toFixed(1)}" r="4.5" class="sp-dot"/></svg>`;
+}
+
+export function nextDay() {
+  const days = state.program.days;
+  if (!days.length) return null;
+  const i = days.findIndex((d) => d.id === state.lastDayId);
+  return days[(i + 1) % days.length];
+}
+
+// ---------------------------------------------------------------------------
+// Hari Ini
+// ---------------------------------------------------------------------------
+
+function deloadBanner(an, today) {
+  const dl = activeDeload();
+  if (dl) {
+    const what = dl.type === 'volume' ? 'set −50%, beban tetap, RIR ≥ 3' : 'beban −12,5%, set −30%, RIR ≥ 2';
+    return `<button class="banner good" data-act="nav" data-to="#/fatigue">${icon('pulse', 22)}<div><b>Deload aktif sampai ${dayShort(dl.endDate)}</b><div class="muted-s">${what}</div></div></button>`;
+  }
+  if (!an) return '';
+  const s = state.deload;
+  if ((s.snoozeUntil && today <= s.snoozeUntil) || (s.hiddenUntil && today <= s.hiddenUntil)) return '';
+  const d = an.deload;
+  if (d.status === 'deload') {
+    return `<button class="banner warn" data-act="nav" data-to="#/fatigue">${icon('warn', 22)}<div><b>Deload disarankan</b><div class="muted-s">${d.proactive && d.coreTriggerCount < 2 ? 'Jadwal proaktif tercapai' : `${d.coreTriggerCount} pemicu aktif`} · ketuk untuk alasan</div></div></button>`;
+  }
+  if (d.status === 'watch' && d.coreTriggerCount >= 1) {
+    return `<button class="banner soft" data-act="nav" data-to="#/fatigue">${icon('pulse', 22)}<div><b>Waspada</b><div class="muted-s">${d.coreTriggerCount} pemicu mulai terlihat</div></div></button>`;
+  }
+  return '';
+}
+
+export function todayView() {
+  const today = localDate();
+  const an = hasTrainingData() ? analyzeAt(today) : null;
+  const day = nextDay();
+  const a = state.active;
+  const week = state.sessions.filter((s) => s.date >= weekStart(today)).length;
+  const planned = state.program.days.length;
+  const ci = state.checkins.find((c) => c.date === today);
+
+  let sessionCard = '';
+  if (a) {
+    sessionCard = `<div class="card hero"><div class="k">SESI BERJALAN</div><div class="hero-t">${esc(a.name)}</div>
+      <div class="muted-s">${a.sets.length} set tercatat · mulai ${new Date(a.startedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</div>
+      <button class="btn-primary" data-act="nav" data-to="#/session">LANJUTKAN SESI</button></div>`;
+  } else if (day) {
+    const items = day.items;
+    sessionCard = `<div class="card hero"><div class="k">SESI BERIKUTNYA</div>
+      <div class="hero-row"><div class="hero-t">${esc(day.name)}</div><div class="muted-s">${items.length} latihan · ±${Math.round(items.reduce((t, i) => t + i.sets * (i.rest / 60 + 0.8), 0) + 5)} mnt</div></div>
+      <div class="list">${items.slice(0, 3).map((i) => `<div class="li"><span>${esc(getExercise(i.exId).name)}</span><span class="muted">${i.sets}×${i.repMin}–${i.repMax} · ${num(i.load)} kg</span></div>`).join('')}
+      ${items.length > 3 ? `<div class="li"><span class="muted">+ ${items.length - 3} latihan lainnya</span></div>` : ''}</div>
+      <button class="btn-primary" data-act="ses-begin" data-day="${day.id}">${icon('play', 22)} MULAI SESI</button></div>`;
+  } else {
+    sessionCard = `<div class="card"><p>Program kosong. Tambahkan hari latihan di menu Program.</p><button class="btn-primary" data-act="nav" data-to="#/program">Buka Program</button></div>`;
+  }
+
+  const muscles = an ? [...an.snapshot.muscles].sort((x, y) => y.acute - x.acute).slice(0, 3) : [];
+  return {
+    nav: 'today',
+    html: `<section class="page">
+      <div class="page-h"><div><div class="muted-s">${dayLong(today)}</div><h1 class="h1">Hari Ini</h1></div>
+        <button class="icon-btn" data-act="nav" data-to="#/settings" aria-label="Pengaturan">${icon('gear', 20)}</button></div>
+      ${deloadBanner(an, today)}
+      ${sessionCard}
+      <div class="card row-card"><div><div class="k">READINESS</div>
+        <div>${ci ? `${Math.round(F.readinessOfCheckin(ci))}/100 · sudah check-in` : 'Belum check-in hari ini'}</div></div>
+        <button class="btn-sm outline" data-act="nav" data-to="#/checkin">${ci ? 'Ubah' : 'Check-in · 10 dtk'}</button></div>
+      <div class="card"><div class="card-h"><b>Minggu ini · ${week} dari ${planned} sesi</b>
+        <span class="dots">${Array.from({ length: planned }, (_, i) => `<i class="${i < week ? 'on' : ''}"></i>`).join('')}</span></div>
+        ${muscles.length ? `<div class="chips-row wrap">${muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} ${num(m.acute)} set ef.</span>`).join('')}</div>` : '<div class="muted-s">Volume per otot muncul setelah sesi pertama.</div>'}
+      </div>
+    </section>`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Check-in
+// ---------------------------------------------------------------------------
+
+let ci = null;
+const JOINTS = ['Bahu', 'Siku', 'Lutut', 'Pinggang', 'Pergelangan'];
+
+function ciInit() {
+  const today = localDate();
+  const ex = state.checkins.find((c) => c.date === today);
+  const last = [...state.checkins].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+  ci = ex
+    ? { ...ex, joints: [...(ex.joints || [])] }
+    : last
+      ? { sleep: last.sleep, soreness: last.soreness, jointPain: last.jointPain, motivation: last.motivation, joints: [] }
+      : { sleep: 4, soreness: 4, jointPain: 5, motivation: 3, joints: [] };
+}
+
+function seg(key, labels) {
+  return `<div class="seg5">${labels
+    .map((l, i) => `<button class="seg-b ${ci[key] === i + 1 ? 'sel' : ''}" data-act="ci-set" data-k="${key}" data-v="${i + 1}">${l}</button>`)
+    .join('')}</div>`;
+}
+
+export function checkinView() {
+  if (!ci) ciInit();
+  const pain = ['Berat', 'Sedang', 'Ringan', 'Sedikit', 'Tidak'];
+  return {
+    nav: null,
+    html: `<section class="page">
+      <div class="page-h"><div><div class="muted-s">Kurang dari 15 detik</div><h1 class="h1">Check-in cepat</h1></div>
+        <button class="btn-link" data-act="ci-skip">Lewati</button></div>
+      <div class="q"><div class="q-t">Tidur semalam</div>${seg('sleep', ['<5 jam', '5–6', '6–7', '7–8', '>8'])}</div>
+      <div class="q"><div class="q-t">Pegal otot</div>${seg('soreness', pain)}</div>
+      <div class="q"><div class="q-t">Nyeri sendi</div>${seg('jointPain', pain)}
+        ${ci.jointPain <= 3 ? `<div class="chips-row wrap"><span class="muted-s">Bagian mana?</span>${JOINTS.map((j) => `<button class="chip-b ${ci.joints.includes(j) ? 'sel warn' : ''}" data-act="ci-joint" data-v="${j}">${j}</button>`).join('')}</div>` : ''}</div>
+      <div class="q"><div class="q-t">Motivasi</div>${seg('motivation', ['1', '2', '3', '4', '5'])}</div>
+      <p class="tiny">Nilai awal diambil dari check-in terakhir. Skala 1–5, 5 berarti terbaik atau tanpa nyeri. Data tetap di perangkat ini.</p>
+      <div class="grow"></div>
+      <button class="btn-primary" data-act="ci-save">SIMPAN</button>
+    </section>`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Program
+// ---------------------------------------------------------------------------
+
+export function programView() {
+  const days = state.program.days;
+  return {
+    nav: 'program',
+    html: `<section class="page">
+      ${bar('Program', esc(state.program.name), false)}
+      ${days.map((d) => `<button class="card tap" data-act="nav" data-to="#/day/${d.id}"><div class="card-h"><b>${esc(d.name)}</b><span class="muted-s">${d.items.length} latihan ›</span></div>
+        <div class="muted-s">${d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ')}${d.items.length > 3 ? ' …' : ''}</div></button>`).join('')}
+      <button class="btn-ghost" data-act="day-add">+ Tambah hari</button>
+      <p class="tiny">Beban awal di program hanya tebakan. Sesuaikan lewat menu ini sebelum latihan pertama.</p>
+    </section>`,
+  };
+}
+
+export function dayView(id) {
+  const day = state.program.days.find((d) => d.id === id);
+  if (!day) return { nav: 'program', html: `<section class="page">${bar('Hari tidak ditemukan')}</section>` };
+  return {
+    nav: null,
+    html: `<section class="page">
+      ${bar('Atur hari', esc(state.program.name))}
+      <label class="field"><span class="k">NAMA HARI</span><input id="dayname" type="text" value="${esc(day.name)}" data-in="day-name" data-day="${day.id}"></label>
+      ${day.items.map((it, i) => {
+        const ex = getExercise(it.exId);
+        return `<div class="card item"><button class="item-main" data-act="nav" data-to="#/item/${day.id}/${i}"><b>${esc(ex.name)}</b>
+          <span class="muted-s">${it.sets}×${it.repMin}–${it.repMax} · ${num(it.load)} kg · RIR ${it.rir} · jeda ${fmtClock(it.rest)}</span></button>
+          <div class="item-ctl"><button class="icon-btn sm" data-act="item-move" data-day="${day.id}" data-i="${i}" data-d="-1" aria-label="Naik" ${i === 0 ? 'disabled' : ''}>${icon('up', 18)}</button>
+          <button class="icon-btn sm" data-act="item-move" data-day="${day.id}" data-i="${i}" data-d="1" aria-label="Turun" ${i === day.items.length - 1 ? 'disabled' : ''}>${icon('down', 18)}</button></div></div>`;
+      }).join('')}
+      <button class="btn-ghost" data-act="nav" data-to="#/pick/day:${day.id}">+ Tambah gerakan</button>
+      <button class="btn-link danger" data-act="day-del" data-day="${day.id}">${pendingDel === day.id ? 'Ketuk lagi untuk menghapus hari ini' : 'Hapus hari'}</button>
+    </section>`,
+  };
+}
+
+let pendingDel = null;
+
+function stepperRow(label, valText, k, dayId, idx) {
+  return `<div class="srow"><span>${label}</span><div class="stp-row">
+    <button class="sb" data-act="it-step" data-k="${k}" data-d="-1" data-day="${dayId}" data-i="${idx}" aria-label="Kurangi ${label}">−</button>
+    <span class="stp-val sm">${valText}</span>
+    <button class="sb" data-act="it-step" data-k="${k}" data-d="1" data-day="${dayId}" data-i="${idx}" aria-label="Tambah ${label}">+</button></div></div>`;
+}
+
+export function itemView(dayId, idx) {
+  const day = state.program.days.find((d) => d.id === dayId);
+  const it = day?.items[idx];
+  if (!it) return { nav: null, html: `<section class="page">${bar('Gerakan tidak ditemukan')}</section>` };
+  const ex = getExercise(it.exId);
+  return {
+    nav: null,
+    html: `<section class="page">
+      ${bar(esc(ex.name), `${esc(day.name)} · latihan ${Number(idx) + 1} dari ${day.items.length}`)}
+      <div class="card tight">
+        ${stepperRow('Jumlah set', it.sets, 'sets', dayId, idx)}
+        ${stepperRow('Rep minimum', it.repMin, 'repMin', dayId, idx)}
+        ${stepperRow('Rep maksimum', it.repMax, 'repMax', dayId, idx)}
+        ${stepperRow('Beban (kg)', num(it.load), 'load', dayId, idx)}
+        ${stepperRow('Jeda antar set', fmtClock(it.rest), 'rest', dayId, idx)}
+      </div>
+      <div class="q"><div class="q-t">RIR target</div><div class="seg5">${[0, 1, 2, 3, 4].map((v) => `<button class="seg-b ${it.rir === v ? 'sel' : ''}" data-act="it-rir" data-day="${dayId}" data-i="${idx}" data-v="${v}">${v}</button>`).join('')}</div></div>
+      <div class="q"><div class="q-t">Otot yang dihitung</div><div class="chips-row wrap">${ex.muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} · ${num(m.weight)}</span>`).join('') || '<span class="muted-s">-</span>'}</div></div>
+      <div class="grow"></div>
+      <button class="btn-primary" data-act="back">SELESAI</button>
+      <button class="btn-link danger" data-act="item-del" data-day="${dayId}" data-i="${idx}">Hapus gerakan dari hari ini</button>
+    </section>`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pilih gerakan
+// ---------------------------------------------------------------------------
+
+let pk = null;
+const pkInit = () => {
+  pk = { sel: new Set(), q: '', group: 'all', equip: null, custom: false };
+};
+
+function pickItems() {
+  const q = pk.q.trim().toLowerCase();
+  const grp = GROUPS.find((g) => g.id === pk.group);
+  return allExercises()
+    .filter((e) => (!q || e.name.toLowerCase().includes(q)))
+    .filter((e) => !grp || e.muscles.some((m) => grp.muscles.includes(m.muscleId) && m.weight >= 1))
+    .filter((e) => !pk.equip || e.equip === pk.equip)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function pickList() {
+  const items = pickItems();
+  if (!items.length) return '<div class="empty small">Tidak ada gerakan yang cocok.</div>';
+  return items
+    .map((e) => {
+      const lp = lastPerf(e.id);
+      const sel = pk.sel.has(e.id);
+      const sub = e.muscles.map((m) => MUSCLE_NAMES[m.muscleId] || m.muscleId).join(', ');
+      return `<button class="pk ${sel ? 'sel' : ''}" data-act="pk-toggle" data-id="${esc(e.id)}">
+        <span class="pk-ic">${esc((e.equip || '??').slice(0, 2).toUpperCase())}</span>
+        <span class="pk-t"><b>${esc(e.name)}</b><span class="muted-s">${esc(e.equip)} · ${esc(sub)}${lp ? ` · terakhir ${num(lp.load)} kg × ${lp.reps}` : ' · belum pernah'}</span></span>
+        <span class="pk-c">${sel ? '✓' : ''}</span></button>`;
+    })
+    .join('');
+}
+
+export function pickView(mode) {
+  if (!pk) pkInit();
+  const target = mode.startsWith('day:') ? state.program.days.find((d) => d.id === mode.slice(4)) : null;
+  const sub = mode === 'session' ? 'Tambah ke sesi berjalan' : `Tambah ke ${target ? esc(target.name) : 'program'}`;
+  return {
+    nav: null,
+    html: `<section class="page pick">
+      ${bar('Pilih gerakan', sub)}
+      <label class="search"><span class="s-ic">${icon('search', 20)}</span><input id="pkq" type="text" inputmode="search" placeholder="Cari gerakan, misal row atau pulldown" value="${esc(pk.q)}" data-in="pk-q"></label>
+      <div class="chips-row scroll">
+        <button class="chip-b ${pk.group === 'all' ? 'sel acc' : ''}" data-act="pk-group" data-v="all">Semua</button>
+        ${GROUPS.map((g) => `<button class="chip-b ${pk.group === g.id ? 'sel acc' : ''}" data-act="pk-group" data-v="${g.id}">${g.label}</button>`).join('')}
+      </div>
+      <div class="chips-row scroll">
+        ${EQUIPMENT.map((e) => `<button class="chip-b sm ${pk.equip === e ? 'sel' : ''}" data-act="pk-equip" data-v="${e}">${e}</button>`).join('')}
+      </div>
+      <div class="plist" id="plist">${pickList()}</div>
+      ${
+        pk.custom
+          ? `<div class="card"><label class="field"><span class="k">NAMA GERAKAN</span><input id="cname" type="text" placeholder="Contoh: Smith Machine Press"></label>
+             <div class="row-g"><select id="cmuscle">${Object.entries(MUSCLE_NAMES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+             <select id="cequip">${EQUIPMENT.map((e) => `<option>${e}</option>`).join('')}</select></div>
+             <button class="btn-sm wide" data-act="pk-csave">Simpan gerakan</button></div>`
+          : `<button class="btn-ghost dashed" data-act="pk-custom">+ Buat gerakan kustom</button>`
+      }
+      <button class="btn-primary" id="pkadd" data-act="pk-add" data-mode="${esc(mode)}" ${pk.sel.size ? '' : 'disabled'}>TAMBAH ${pk.sel.size || ''} GERAKAN</button>
+    </section>`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Riwayat
+// ---------------------------------------------------------------------------
+
+let histTab = 'sesi';
+
+function weekLabel(date, today) {
+  const ws = weekStart(date);
+  const cur = weekStart(today);
+  if (ws === cur) return 'MINGGU INI';
+  if (ws === addDaysStr(cur, -7)) return 'MINGGU LALU';
+  return 'MINGGU ' + dayShort(ws).toUpperCase();
+}
+
+export function historyView() {
+  const today = localDate();
+  const list = sessionsDesc();
+  let body = '';
+  if (histTab === 'sesi') {
+    if (!list.length) body = `<div class="empty"><h2>Belum ada sesi</h2><p>Sesi yang selesai akan muncul di sini.</p></div>`;
+    else {
+      const wk = state.sessions.filter((s) => s.date >= weekStart(today));
+      const sets = wk.reduce((t, s) => t + sessionStats(s).workSets, 0);
+      const vol = wk.reduce((t, s) => t + sessionStats(s).volume, 0);
+      body = `<div class="stats3"><div class="stat"><div class="k">Minggu ini</div><div class="v">${wk.length} sesi</div></div>
+        <div class="stat"><div class="k">Set kerja</div><div class="v">${sets}</div></div>
+        <div class="stat"><div class="k">Volume</div><div class="v">${num(vol / 1000)} t</div></div></div>`;
+      let last = '';
+      for (const s of list) {
+        const lbl = weekLabel(s.date, today);
+        if (lbl !== last) {
+          body += `<div class="sec">${lbl}</div>`;
+          last = lbl;
+        }
+        const st = sessionStats(s);
+        const prs = sessionPRs(s);
+        body += `<button class="card tap" data-act="nav" data-to="#/ses/${s.id}"><div class="card-h"><b>${esc(s.name)}</b><span class="muted-s">${dayShort(s.date)}</span></div>
+          <div class="muted-s">${fmtDurationMin(s.durationMin)} · ${st.workSets} set · ${fmtThousands(st.volume)} kg</div>
+          ${prs.length ? `<div class="chips-row"><span class="pr">PR ${esc(getExercise(prs[0].exId).name)} ${num(prs[0].set.load)}×${prs[0].set.reps}${prs.length > 1 ? ` +${prs.length - 1}` : ''}</span></div>` : ''}</button>`;
+      }
+    }
+  } else {
+    const ids = [...new Set(state.sessions.flatMap((s) => s.sets.map((t) => t.exId)))];
+    if (!ids.length) body = `<div class="empty"><h2>Belum ada data</h2><p>Grafik per gerakan muncul setelah sesi pertama.</p></div>`;
+    else {
+      body = ids
+        .map((id) => {
+          const rows = state.sessions
+            .map((s) => ({ s, best: Math.max(0, ...s.sets.filter((t) => t.exId === id && t.type === 'working').map((t) => e1rmOf(t) ?? 0)) }))
+            .filter((r) => r.best > 0);
+          const best = rows.length ? Math.max(...rows.map((r) => r.best)) : null;
+          return { id, n: state.sessions.filter((s) => s.sets.some((t) => t.exId === id)).length, best };
+        })
+        .sort((a, b) => b.n - a.n)
+        .map((r) => `<button class="card tap" data-act="nav" data-to="#/hist-ex/${esc(r.id)}"><div class="card-h"><b>${esc(getExercise(r.id).name)}</b><span class="muted-s">${r.n} sesi ›</span></div>
+          <div class="muted-s">${r.best ? `e1RM terbaik ${num(r.best)} kg` : 'e1RM belum dapat dihitung'}</div></button>`)
+        .join('');
+    }
+  }
+  return {
+    nav: 'history',
+    html: `<section class="page">${bar('Riwayat', '', false)}
+      <div class="tabs"><button class="tab ${histTab === 'sesi' ? 'on' : ''}" data-act="hist-tab" data-v="sesi">Sesi</button>
+      <button class="tab ${histTab === 'latihan' ? 'on' : ''}" data-act="hist-tab" data-v="latihan">Per latihan</button></div>
+      ${body}</section>`,
+  };
+}
+
+export function histExView(exId) {
+  const ex = getExercise(exId);
+  const rows = sessionsDesc()
+    .map((s) => {
+      const w = s.sets.filter((t) => t.exId === exId && t.type === 'working');
+      if (!w.length) return null;
+      const top = w.reduce((a, b) => ((e1rmOf(b) ?? 0) > (e1rmOf(a) ?? 0) ? b : a));
+      return { s, w, top, e: e1rmOf(top) };
+    })
+    .filter(Boolean);
+  const series = [...rows].reverse().map((r) => r.e).filter((e) => e !== null);
+  return {
+    nav: null,
+    html: `<section class="page">${bar(esc(ex.name), 'Riwayat gerakan')}
+      ${series.length >= 2 ? `<div class="card"><div class="card-h"><span class="k">e1RM TERBAIK PER SESI</span><span class="muted-s">${num(series[0])} → ${num(series[series.length - 1])} kg</span></div>${spark(series)}</div>` : '<div class="card muted-s">Grafik muncul setelah 2 sesi atau lebih.</div>'}
+      ${rows.map((r) => `<button class="card tap" data-act="nav" data-to="#/ses/${r.s.id}"><div class="card-h"><b>${dayShort(r.s.date)}</b><span class="muted-s">${r.w.length} set</span></div>
+        <div class="setchips">${r.w.map((t) => `<span class="setchip ${t.confirmed ? '' : 'unc'}">${num(t.load)} × ${t.reps}${t.rir != null ? ' · RIR ' + t.rir : ''}</span>`).join('')}</div></button>`).join('')}
+    </section>`,
+  };
+}
+
+export function summaryView(id) {
+  const s = state.sessions.find((x) => x.id === id);
+  if (!s) return { nav: 'history', html: `<section class="page">${bar('Sesi tidak ditemukan')}</section>` };
+  const st = sessionStats(s);
+  const prs = sessionPRs(s);
+  const an = analyzeAt(s.date);
+  const sys = an.snapshot.systemic.score;
+  const lv = level(sys);
+  const top = [...an.snapshot.muscles].sort((a, b) => b.fatigue - a.fatigue).slice(0, 2);
+  const byEx = [];
+  for (const t of s.sets) {
+    let g = byEx.find((x) => x.exId === t.exId);
+    if (!g) byEx.push((g = { exId: t.exId, sets: [] }));
+    g.sets.push(t);
+  }
+  return {
+    nav: null,
+    html: `<section class="page">
+      ${bar(esc(s.name), `${dayLong(s.date)} · sesi selesai`)}
+      <div class="stats3"><div class="stat"><div class="k">Durasi</div><div class="v">${fmtDurationMin(s.durationMin)}</div></div>
+        <div class="stat"><div class="k">Set kerja</div><div class="v">${st.workSets}</div></div>
+        <div class="stat"><div class="k">Volume</div><div class="v">${fmtThousands(st.volume)} kg</div></div></div>
+      ${prs.map((p) => `<div class="banner good">${icon('trophy', 22)}<div><b>PR baru</b> · ${esc(getExercise(p.exId).name)} ${num(p.set.load)} kg × ${p.set.reps}</div></div>`).join('')}
+      <div class="stats3 two"><div class="stat"><div class="k">Rata-rata TUT per set</div><div class="v work">${st.avgTut != null ? fmtClock(st.avgTut) : '-'}</div></div>
+        <div class="stat"><div class="k">Rata-rata jeda</div><div class="v rest">${st.avgRest != null ? fmtClock(st.avgRest) : '-'}</div></div></div>
+      ${byEx.map((g) => `<div class="card"><div class="card-h"><b>${esc(getExercise(g.exId).name)}</b><span class="muted-s">${g.sets.length} set · ${fmtThousands(g.sets.reduce((a, t) => a + t.load * t.reps, 0))} kg</span></div>
+        <div class="setchips">${g.sets.map((t) => `<span class="setchip ${t.confirmed ? '' : 'unc'}">${num(t.load)} × ${t.reps}${t.rir != null ? ' · RIR ' + t.rir : ''}${t.tut != null ? ' · ' + fmtClock(t.tut) : ''}${t.type === 'warmup' ? ' · WU' : t.type === 'drop' ? ' · drop' : ''}${t.confirmed ? '' : ' •'}</span>`).join('')}</div></div>`).join('')}
+      ${st.unconfirmed ? `<div class="note">• ${st.unconfirmed} set belum dikonfirmasi (nilai tebakan). Tidak dipakai untuk menghitung RIR drift.</div>` : ''}
+      <div class="card row-card"><div><div class="k">FATIGUE PADA HARI SESI</div><div class="big ${lv.cls}">${Math.round(sys)} <span class="muted-s">${lv.label}${top.length ? ' · ' + top.map((m) => `${MUSCLE_NAMES[m.muscleId] || m.muscleId} ${Math.round(m.fatigue)}`).join(' · ') : ''}</span></div></div>
+        <button class="btn-link" data-act="nav" data-to="#/fatigue">Mengapa?</button></div>
+      ${s.rpe ? `<div class="muted-s">RPE sesi: ${s.rpe}</div>` : ''}
+      <button class="btn-link danger" data-act="ses-del" data-id="${s.id}">${pendingSesDel === s.id ? 'Ketuk lagi untuk menghapus sesi ini' : 'Hapus sesi'}</button>
+    </section>`,
+  };
+}
+let pendingSesDel = null;
+
+// ---------------------------------------------------------------------------
+// Fatigue & deload
+// ---------------------------------------------------------------------------
+
+let fatMuscle = null;
+
+function deloadCard(an, today) {
+  const dl = activeDeload();
+  if (dl) {
+    return `<div class="card"><div class="card-h"><b>Deload aktif</b><span class="muted-s">sampai ${dayShort(dl.endDate)}</span></div>
+      <p class="muted-s">${dl.type === 'volume' ? 'Tipe volume: set −50%, beban tetap, RIR ≥ 3.' : 'Tipe intensitas: beban −12,5%, set −30%, RIR ≥ 2.'} Sesi yang dimulai dalam periode ini otomatis memakai rencana deload.</p>
+      <button class="btn-sm wide" data-act="dl-end">Akhiri deload lebih awal</button></div>`;
+  }
+  const d = an.deload;
+  const hidden = (state.deload.snoozeUntil && today <= state.deload.snoozeUntil) || (state.deload.hiddenUntil && today <= state.deload.hiddenUntil);
+  const trig = d.triggers.map((t) => `<div class="trig ${t.triggered ? 'on' : ''}"><span class="tdot">${t.triggered ? '✓' : ''}</span><div><b>${esc(t.label)}</b><div class="muted-s">${esc(t.detail)}</div></div></div>`).join('');
+  const rx = d.type === 'intensity' ? 'Beban −12,5% · set −30% · RIR ≥ 2' : 'Set −50% · beban tetap · RIR ≥ 3';
+  const title = { ok: 'Tidak ada pemicu deload', watch: 'Waspada', deload: `Deload disarankan${d.durationDays ? ' · ' + d.durationDays + ' hari' : ''}` }[d.status];
+  return `<div class="card"><div class="card-h"><b>${title}</b><span class="muted-s">${d.coreTriggerCount} dari 4 pemicu reaktif</span></div>
+    <div class="trigs">${trig}</div>
+    ${d.status === 'deload' ? `<div class="infocard one"><div><div class="k">USULAN · TIPE ${d.type === 'intensity' ? 'INTENSITAS' : 'VOLUME'}</div><div>${rx}</div></div></div>
+      ${hidden ? '<div class="muted-s">Peringatan ditunda atau diabaikan sementara.</div>' : ''}
+      <div class="row-g"><button class="btn-primary flex" data-act="dl-accept">TERIMA</button></div>
+      <div class="row-g"><button class="btn-sm wide" data-act="dl-snooze" data-n="3">Tunda 3 hari</button><button class="btn-sm wide" data-act="dl-snooze" data-n="7">Tunda 1 minggu</button><button class="btn-sm wide" data-act="dl-ignore">Abaikan</button></div>`
+      : `<p class="muted-s">${esc(d.message)}</p>`}
+  </div>`;
+}
+
+export function fatigueView() {
+  const today = localDate();
+  if (!hasTrainingData()) {
+    return {
+      nav: 'fatigue',
+      html: `<section class="page">${bar('Fatigue', '', false)}<div class="empty"><h2>Belum ada data</h2><p>Skor fatigue dihitung dari set yang dicatat dan check-in harian. Selesaikan satu sesi untuk mulai.</p>
+        <button class="btn-primary" data-act="nav" data-to="#/today">Ke Hari Ini</button></div></section>`,
+    };
+  }
+  const an = analyzeAt(today);
+  const snap = an.snapshot;
+  const sys = snap.systemic.score;
+  const lv = level(sys);
+  const muscles = [...snap.muscles].sort((a, b) => b.fatigue - a.fatigue);
+  const lowConf = muscles.length && muscles.every((m) => m.confidence === 'rendah');
+  const sel = muscles.find((m) => m.muscleId === fatMuscle) || muscles[0];
+  const segN = Math.min(5, Math.max(0, Math.ceil(sys / 20)));
+  const hist = an.history.map((h) => h.score);
+  return {
+    nav: 'fatigue',
+    html: `<section class="page">${bar('Fatigue', 'Estimasi dari data latihan dan check-in', false)}
+      <div class="card"><div class="fat-top"><div><div class="k">FATIGUE SISTEMIK</div><div class="score">${Math.round(sys)}</div></div><span class="lvl ${lv.cls}">${lv.label}</span></div>
+        <div class="gauge">${[0, 1, 2, 3, 4].map((i) => `<i class="${i < segN ? (i >= 3 ? 'warn' : 'on') : ''}"></i>`).join('')}</div>
+        <div class="bar-scale"><span>0 rendah</span><span>70 ambang tinggi</span><span>100</span></div>
+        ${lowConf ? '<p class="tiny">Riwayat masih di bawah 14 hari: skor memakai baseline default dan kepercayaannya rendah.</p>' : ''}</div>
+      <div class="sec">PER OTOT</div>
+      <div class="mus">${muscles.map((m) => {
+        const l = level(m.fatigue);
+        return `<button class="mrow ${sel && sel.muscleId === m.muscleId ? 'sel' : ''}" data-act="fat-muscle" data-v="${m.muscleId}"><span class="mn">${MUSCLE_NAMES[m.muscleId] || m.muscleId}</span>
+          <span class="mbar"><i class="${l.cls}" style="width:${Math.min(100, m.fatigue)}%"></i></span><span class="mv">${Math.round(m.fatigue)}</span></button>`;
+      }).join('')}</div>
+      ${hist.length > 1 ? `<div class="card"><div class="card-h"><span class="k">TREN 7 HARI</span><span class="muted-s">ambang 70</span></div>${spark(hist, { threshold: 70, min: 0, max: 100 })}</div>` : ''}
+      ${sel ? `<div class="card"><b>Mengapa ${MUSCLE_NAMES[sel.muscleId] || sel.muscleId} ${Math.round(sel.fatigue)}?</b>
+        <div class="why">${sel.explanation.components.map((c) => `<div class="li"><span>${esc(c.name)}</span><span class="v">${c.value}${c.contribution !== undefined ? ` <span class="muted">→ ${num(c.contribution, 1)}</span>` : ''}</span></div>`).join('')}</div>
+        <p class="tiny">${esc(sel.explanation.caveats?.[0] || '')}</p></div>` : ''}
+      <div class="sec">DELOAD</div>
+      ${deloadCard(an, today)}
+      <p class="tiny">Estimasi heuristik berdasarkan data Anda, bukan saran medis. Keputusan akhir ada di Anda.</p>
+    </section>`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pengaturan
+// ---------------------------------------------------------------------------
+
+let confirmReset = null;
+const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = () => window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+export function settingsView() {
+  const s = state.settings;
+  const sw = (k, label, hint) => `<div class="srow"><div><div>${label}</div><div class="muted-s">${hint}</div></div>
+    <button class="tog ${s[k] ? 'on' : ''}" data-act="set-toggle" data-k="${k}" role="switch" aria-checked="${s[k]}" aria-label="${label}"><i></i></button></div>`;
+  return {
+    nav: null,
+    html: `<section class="page">${bar('Pengaturan', 'Gym Hipertrofi')}
+      ${isIos() && !isStandalone() ? `<div class="banner soft"><div><b>Pasang ke Layar Utama</b><div class="muted-s">Di Safari ketuk tombol Bagikan, lalu Tambah ke Layar Utama. Data lebih awet dan aplikasi jalan layar penuh.</div></div></div>` : ''}
+      <div class="card tight">
+        ${sw('sound', 'Bunyi saat jeda selesai', 'Mengikuti tombol senyap iPhone')}
+        ${sw('wakeLock', 'Jaga layar tetap menyala saat sesi', 'Agar timer dan bunyi tetap berjalan')}
+        <div class="srow"><div><div>Jadwal deload proaktif</div><div class="muted-s">Tiap berapa minggu (4–8)</div></div>
+          <div class="stp-row"><button class="sb" data-act="set-interval" data-d="-1" aria-label="Kurangi">−</button><span class="stp-val sm">${s.deloadIntervalWeeks}</span><button class="sb" data-act="set-interval" data-d="1" aria-label="Tambah">+</button></div></div>
+      </div>
+      <div class="sec">DATA</div>
+      <div class="card">
+        <p class="muted-s">Semua data tersimpan di perangkat ini. Buat cadangan berkala, karena Safari dapat menghapus data situs yang lama tidak dibuka.</p>
+        <div class="row-g"><button class="btn-sm wide" data-act="data-export">Ekspor cadangan</button>
+        <label class="btn-sm wide file">Impor cadangan<input type="file" accept="application/json,.json" data-change="data-import"></label></div>
+        <div class="muted-s">${state.sessions.length} sesi · ${state.checkins.length} check-in tersimpan</div>
+      </div>
+      <div class="card">
+        <button class="btn-link" data-act="reset-program">${confirmReset === 'program' ? 'Ketuk lagi: kembalikan program ke awal' : 'Kembalikan program ke bawaan'}</button>
+        <button class="btn-link danger" data-act="reset-all">${confirmReset === 'all' ? 'Ketuk lagi: hapus SEMUA data' : 'Hapus semua data'}</button>
+      </div>
+      <p class="tiny">Estimasi fatigue dan deload adalah heuristik, bukan saran medis.</p>
+    </section>`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Aksi
+// ---------------------------------------------------------------------------
+
+const dayById = (id) => state.program.days.find((d) => d.id === id);
+
+export function resetDrafts() {
+  ci = null;
+  pk = null;
+  pendingDel = null;
+  pendingSesDel = null;
+  confirmReset = null;
+}
+
+function stepItem(it, k, d) {
+  if (k === 'sets') it.sets = Math.min(12, Math.max(1, it.sets + d));
+  else if (k === 'repMin') it.repMin = Math.min(it.repMax, Math.max(1, it.repMin + d));
+  else if (k === 'repMax') it.repMax = Math.min(40, Math.max(it.repMin, it.repMax + d));
+  else if (k === 'rest') it.rest = Math.min(600, Math.max(15, it.rest + d * 15));
+  else if (k === 'load') {
+    const step = (d > 0 ? it.load : it.load - 0.01) < 20 ? 1 : 2.5;
+    it.load = Math.max(0, Math.round((it.load + d * step) * 2) / 2);
+  }
+}
+
+function newItemFor(exId) {
+  const ex = getExercise(exId);
+  const lp = lastPerf(exId);
+  return {
+    exId, sets: 3, repMin: ex.compound ? 6 : 10, repMax: ex.compound ? 10 : 15,
+    load: lp ? lp.load : 20, rir: ex.compound ? 2 : 1, rest: ex.compound ? 150 : 90,
+  };
+}
+
+onMany({
+  'go-today': () => navigate('#/today'),
+  'ses-begin': (el) => startSession(el.dataset.day),
+  'ci-set': (el) => {
+    ci[el.dataset.k] = Number(el.dataset.v);
+    rerender();
+  },
+  'ci-joint': (el) => {
+    const j = el.dataset.v;
+    ci.joints = ci.joints.includes(j) ? ci.joints.filter((x) => x !== j) : [...ci.joints, j];
+    rerender();
+  },
+  'ci-save': () => {
+    const today = localDate();
+    const rec = { date: today, sleep: ci.sleep, soreness: ci.soreness, jointPain: ci.jointPain, motivation: ci.motivation, joints: ci.jointPain <= 3 ? ci.joints : [] };
+    const i = state.checkins.findIndex((c) => c.date === today);
+    if (i >= 0) state.checkins[i] = rec;
+    else state.checkins.push(rec);
+    ci = null;
+    save();
+    toast('Check-in tersimpan');
+    navigate('#/today');
+  },
+  'ci-skip': () => {
+    ci = null;
+    navigate('#/today');
+  },
+  'day-add': () => {
+    const id = 'd' + uid();
+    state.program.days.push({ id, name: `Hari ${state.program.days.length + 1}`, items: [] });
+    save();
+    navigate('#/day/' + id);
+  },
+  'day-name': (el) => {
+    const d = dayById(el.dataset.day);
+    if (d) {
+      d.name = el.value.trim() || 'Tanpa nama';
+      save();
+    }
+  },
+  'day-del': (el) => {
+    if (pendingDel !== el.dataset.day) {
+      pendingDel = el.dataset.day;
+      rerender();
+      return;
+    }
+    state.program.days = state.program.days.filter((d) => d.id !== el.dataset.day);
+    pendingDel = null;
+    save();
+    navigate('#/program');
+  },
+  'item-move': (el) => {
+    const d = dayById(el.dataset.day);
+    const i = Number(el.dataset.i);
+    const j = i + Number(el.dataset.d);
+    if (!d || j < 0 || j >= d.items.length) return;
+    [d.items[i], d.items[j]] = [d.items[j], d.items[i]];
+    save();
+    rerender();
+  },
+  'item-del': (el) => {
+    const d = dayById(el.dataset.day);
+    if (d) d.items.splice(Number(el.dataset.i), 1);
+    save();
+    history.back();
+  },
+  'it-step': (el) => {
+    const d = dayById(el.dataset.day);
+    const it = d?.items[Number(el.dataset.i)];
+    if (!it) return;
+    stepItem(it, el.dataset.k, Number(el.dataset.d));
+    save();
+    rerender();
+  },
+  'it-rir': (el) => {
+    const it = dayById(el.dataset.day)?.items[Number(el.dataset.i)];
+    if (!it) return;
+    it.rir = Number(el.dataset.v);
+    save();
+    rerender();
+  },
+  'pk-q': (el) => {
+    pk.q = el.value;
+    document.getElementById('plist').innerHTML = pickList();
+  },
+  'pk-group': (el) => {
+    pk.group = el.dataset.v;
+    rerender();
+  },
+  'pk-equip': (el) => {
+    pk.equip = pk.equip === el.dataset.v ? null : el.dataset.v;
+    rerender();
+  },
+  'pk-toggle': (el) => {
+    const id = el.dataset.id;
+    pk.sel.has(id) ? pk.sel.delete(id) : pk.sel.add(id);
+    document.getElementById('plist').innerHTML = pickList();
+    const b = document.getElementById('pkadd');
+    b.disabled = !pk.sel.size;
+    b.textContent = `TAMBAH ${pk.sel.size || ''} GERAKAN`;
+  },
+  'pk-custom': () => {
+    pk.custom = true;
+    rerender();
+  },
+  'pk-csave': () => {
+    const name = document.getElementById('cname').value.trim();
+    if (!name) return toast('Isi nama gerakan dulu');
+    const id = 'c' + uid();
+    state.customExercises.push({
+      id, name, equip: document.getElementById('cequip').value,
+      muscles: [{ muscleId: document.getElementById('cmuscle').value, weight: 1 }], compound: false, main: false,
+    });
+    pk.sel.add(id);
+    pk.custom = false;
+    save();
+    rerender();
+  },
+  'pk-add': (el) => {
+    const mode = el.dataset.mode;
+    const ids = [...pk.sel];
+    if (!ids.length) return;
+    if (mode === 'session') {
+      ids.forEach(addToActive);
+      pk = null;
+      navigate('#/session');
+    } else {
+      const d = dayById(mode.slice(4));
+      if (d) ids.forEach((id) => d.items.push(newItemFor(id)));
+      pk = null;
+      save();
+      navigate('#/day/' + mode.slice(4));
+    }
+  },
+  'hist-tab': (el) => {
+    histTab = el.dataset.v;
+    rerender();
+  },
+  'ses-del': (el) => {
+    if (pendingSesDel !== el.dataset.id) {
+      pendingSesDel = el.dataset.id;
+      rerender();
+      return;
+    }
+    state.sessions = state.sessions.filter((s) => s.id !== el.dataset.id);
+    pendingSesDel = null;
+    save();
+    navigate('#/history');
+  },
+  'fat-muscle': (el) => {
+    fatMuscle = el.dataset.v;
+    rerender();
+  },
+  'dl-accept': () => {
+    const today = localDate();
+    const d = analyzeAt(today).deload;
+    if (d.status !== 'deload') return;
+    state.deload.active = { type: d.type, startDate: today, endDate: addDaysStr(today, (d.durationDays || 7) - 1) };
+    state.deload.lastDeloadDate = today;
+    state.deload.snoozeUntil = null;
+    state.deload.hiddenUntil = null;
+    save();
+    toast('Deload dimulai. Sesi berikutnya memakai rencana ringan.');
+    rerender();
+  },
+  'dl-snooze': (el) => {
+    state.deload.snoozeUntil = addDaysStr(localDate(), Number(el.dataset.n));
+    save();
+    toast(`Ditunda ${el.dataset.n} hari`);
+    navigate('#/today');
+  },
+  'dl-ignore': () => {
+    state.deload.hiddenUntil = addDaysStr(localDate(), 7);
+    save();
+    toast('Peringatan disembunyikan 7 hari');
+    navigate('#/today');
+  },
+  'dl-end': () => {
+    state.deload.active = null;
+    save();
+    rerender();
+  },
+  'set-toggle': (el) => {
+    state.settings[el.dataset.k] = !state.settings[el.dataset.k];
+    save();
+    rerender();
+  },
+  'set-interval': (el) => {
+    state.settings.deloadIntervalWeeks = Math.min(8, Math.max(4, state.settings.deloadIntervalWeeks + Number(el.dataset.d)));
+    save();
+    rerender();
+  },
+  'data-export': async () => {
+    const text = exportJson();
+    const name = `gym-hipertrofi-${localDate()}.json`;
+    try {
+      const file = new File([text], name, { type: 'application/json' });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Cadangan Gym Hipertrofi' });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  },
+  'data-import': async (el) => {
+    const f = el.files?.[0];
+    if (!f) return;
+    try {
+      await importJson(await f.text());
+      toast('Cadangan dipulihkan');
+      navigate('#/today');
+    } catch (e) {
+      toast(e.message || 'Gagal mengimpor berkas');
+    }
+  },
+  'reset-program': () => {
+    if (confirmReset !== 'program') {
+      confirmReset = 'program';
+      rerender();
+      return;
+    }
+    state.program = defaultProgram();
+    state.lastDayId = null;
+    confirmReset = null;
+    save();
+    toast('Program dikembalikan');
+    rerender();
+  },
+  'reset-all': async () => {
+    if (confirmReset !== 'all') {
+      confirmReset = 'all';
+      rerender();
+      return;
+    }
+    replaceState(defaults());
+    confirmReset = null;
+    await flush();
+    toast('Semua data dihapus');
+    navigate('#/today');
+  },
+});
