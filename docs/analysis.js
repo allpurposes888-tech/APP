@@ -87,6 +87,16 @@ export function lastPerf(exId) {
   return null;
 }
 
+/** Semua set kerja satu gerakan dari sesi terbaru yang memuatnya (kolom "Lalu" di tabel set). */
+export function lastSets(exId) {
+  const sessions = [...state.sessions].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  for (const s of sessions) {
+    const w = s.sets.filter((t) => t.exId === exId && t.type === 'working');
+    if (w.length) return w;
+  }
+  return [];
+}
+
 export function sessionStats(s) {
   const work = s.sets.filter((t) => t.type !== 'warmup');
   const volume = work.reduce((a, t) => a + t.reps * t.load, 0);
@@ -133,3 +143,22 @@ export function sessionPRs(s) {
 export function sessionsDesc() {
   return [...state.sessions].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
 }
+
+/**
+ * Perkiraan kalori sesi: MET x berat badan (kg) x durasi (jam).
+ * MET latihan beban dari Compendium of Physical Activities (sekitar 3,5 sampai 6), dipilih menurut RPE sesi.
+ * MET sudah memasukkan waktu jeda antar set. Hasil berupa rentang, akurasi sekitar +-30-50%.
+ */
+export function estimateKcal(s) {
+  const kg = state.settings.bodyWeightKg;
+  if (!kg || !s.durationMin) return null;
+  const rpe = s.rpe || 7;
+  const [lo, hi] = rpe <= 6 ? [3.0, 4.0] : rpe <= 8 ? [4.0, 5.5] : [5.0, 6.5];
+  const h = Math.min(s.durationMin, 180) / 60;
+  return { lo: Math.round((lo * kg * h) / 10) * 10, hi: Math.round((hi * kg * h) / 10) * 10 };
+}
+
+export function fmtKcal(k) {
+  return k ? `${fmtNum(k.lo)}–${fmtNum(k.hi)}` : '–';
+}
+const fmtNum = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');

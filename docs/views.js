@@ -5,12 +5,12 @@ import { CATALOG, GROUPS, EQUIPMENT, MUSCLE_NAMES, defaultProgram, TEMPLATES, pr
 import { testBeep } from './device.js';
 import { onMany, navigate, rerender, icon } from './ui.js';
 import {
-  esc, num, fmtClock, fmtThousands, fmtDurationMin, localDate, addDaysStr, dayShort, dayLong, weekStart, uid, mean,
+  esc, num, fmtClock, fmtThousands, fmtDurationMin, localDate, addDaysStr, dayShort, dayLong, weekStart, uid, mean, setTable,
 } from './util.js';
 import {
-  analyzeAt, hasTrainingData, activeDeload, lastPerf, sessionStats, sessionPRs, sessionsDesc, e1rmOf,
+  analyzeAt, hasTrainingData, activeDeload, lastPerf, sessionStats, sessionPRs, sessionsDesc, e1rmOf, estimateKcal, fmtKcal,
 } from './analysis.js';
-import { startSession, addToActive } from './session.js';
+import { startSession, addToActive, stepper } from './session.js';
 
 const bar = (title, sub, back = true) => `<div class="page-h">${
   back ? `<button class="icon-btn" data-act="back" aria-label="Kembali">${icon('back', 20)}</button>` : ''
@@ -69,10 +69,10 @@ export function startView() {
   return {
     nav: 'latih',
     html: `<section class="page">
-      ${bar('Mulai latihan', 'Pilih hari latihan', false)}
+      ${bar('Pilih hari', 'Mulai latihan', false)}
       ${days.map((d) => `<button class="card tap" data-act="ses-begin" data-day="${d.id}">
-        <div class="card-h"><b>${esc(d.name)}</b>${next && next.id === d.id ? '<span class="pr">Berikutnya</span>' : ''}</div>
-        <div class="muted-s">${d.items.length} latihan · ${d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ')}${d.items.length > 3 ? ' …' : ''}</div></button>`).join('')}
+        <div class="card-h"><b>${esc(d.name)}</b>${next && next.id === d.id ? '<span class="pr">berikutnya</span>' : ''}</div>
+        <div class="muted-s">${d.items.length} gerakan · ${d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ')}${d.items.length > 3 ? ' …' : ''}</div></button>`).join('')}
       ${days.length ? '' : '<div class="empty"><h2>Program kosong</h2><p>Tambahkan hari latihan dulu.</p><button class="btn-primary" data-act="nav" data-to="#/program">Buka Program</button></div>'}
     </section>`,
   };
@@ -112,35 +112,33 @@ export function todayView() {
 
   let sessionCard = '';
   if (a) {
-    sessionCard = `<div class="card hero"><div class="k">SESI BERJALAN</div><div class="hero-t">${esc(a.name)}</div>
-      <div class="muted-s">${a.sets.length} set tercatat · mulai ${new Date(a.startedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</div>
-      <button class="btn-primary" data-act="nav" data-to="#/session">LANJUTKAN SESI</button></div>`;
+    sessionCard = `<div><div class="next-k">Sesi berjalan · mulai ${new Date(a.startedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</div><div class="next-t">${esc(a.name)}</div>
+      <div class="muted-s">${a.sets.length} set tercatat</div></div>
+      <button class="btn-primary" data-act="nav" data-to="#/session">Lanjutkan sesi</button>`;
   } else if (day) {
     const items = day.items;
-    sessionCard = `<div class="card hero"><div class="k">SESI BERIKUTNYA</div>
-      <div class="hero-row"><div class="hero-t">${esc(day.name)}</div><div class="muted-s">${items.length} latihan · ±${Math.round(items.reduce((t, i) => t + i.sets * (i.rest / 60 + 0.8), 0) + 5)} mnt</div></div>
-      <div class="list">${items.slice(0, 3).map((i) => `<div class="li"><span>${esc(getExercise(i.exId).name)}</span><span class="muted">${i.sets}×${i.repMin}–${i.repMax} · ${num(i.load)} kg</span></div>`).join('')}
-      ${items.length > 3 ? `<div class="li"><span class="muted">+ ${items.length - 3} latihan lainnya</span></div>` : ''}</div>
-      <button class="btn-primary" data-act="ses-begin" data-day="${day.id}">${icon('play', 22)} MULAI SESI</button></div>`;
+    const mins = Math.round(items.reduce((t, i) => t + i.sets * (i.rest / 60 + 0.8), 0) + 5);
+    sessionCard = `<div><div class="next-k">Berikutnya · ${items.length} gerakan · ±${mins} mnt</div><div class="next-t">${esc(day.name)}</div></div>
+      <table class="plan">${items.map((i) => `<tr><td class="n">${esc(getExercise(i.exId).name)}</td><td class="sr">${i.sets}×${i.repMin}–${i.repMax}</td><td class="kg">${num(i.load)} kg</td></tr>`).join('')}</table>
+      <button class="btn-primary" data-act="ses-begin" data-day="${day.id}">${icon('play', 20)} Mulai ${esc(day.name)}</button>`;
   } else {
-    sessionCard = `<div class="card"><p>Program kosong. Tambahkan hari latihan di menu Program.</p><button class="btn-primary" data-act="nav" data-to="#/program">Buka Program</button></div>`;
+    sessionCard = `<div class="empty"><h2>Program masih kosong</h2><p>Tambahkan hari latihan dulu.</p><button class="btn-primary" data-act="nav" data-to="#/program">Buka Program</button></div>`;
   }
 
   const muscles = an ? [...an.snapshot.muscles].sort((x, y) => y.acute - x.acute).slice(0, 3) : [];
   return {
     nav: 'today',
     html: `<section class="page">
-      <div class="page-h"><div><div class="muted-s">${dayLong(today)}</div><h1 class="h1">Hari Ini</h1></div>
-        <button class="icon-btn" data-act="nav" data-to="#/settings" aria-label="Pengaturan">${icon('gear', 20)}</button></div>
+      <div class="page-h"><div><div class="muted-s">${dayLong(today)}</div><h1 class="h1">Hari ini</h1></div>
+        <button class="icon-btn" data-act="nav" data-to="#/settings" aria-label="Pengaturan">${icon('gear', 22)}</button></div>
       ${deloadBanner(an, today)}
       ${sessionCard}
-      <div class="card row-card"><div><div class="k">READINESS</div>
-        <div>${ci ? `${Math.round(F.readinessOfCheckin(ci))}/100 · sudah check-in` : 'Belum check-in hari ini'}</div></div>
-        <button class="btn-sm outline" data-act="nav" data-to="#/checkin">${ci ? 'Ubah' : 'Check-in · 10 dtk'}</button></div>
-      <div class="card"><div class="card-h"><b>Minggu ini · ${week} dari ${planned} sesi</b>
-        <span class="dots">${Array.from({ length: planned }, (_, i) => `<i class="${i < week ? 'on' : ''}"></i>`).join('')}</span></div>
-        ${muscles.length ? `<div class="chips-row wrap">${muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} ${num(m.acute)} set ef.</span>`).join('')}</div>` : '<div class="muted-s">Volume per otot muncul setelah sesi pertama.</div>'}
+      <div class="strip">
+        <button data-act="nav" data-to="#/checkin"><span class="k">Kesiapan</span>${ci ? `<span class="v">${Math.round(F.readinessOfCheckin(ci))}<span class="muted-s">/100</span></span>` : '<span class="go">Check-in →</span>'}</button>
+        <div><span class="k">Minggu ini</span><span class="v">${week}<span class="muted-s">/${planned}</span></span>
+          <span class="dots">${Array.from({ length: planned }, (_, i) => `<i class="${i < week ? 'on' : ''}"></i>`).join('')}</span></div>
       </div>
+      ${muscles.length ? `<div><div class="k" style="margin-bottom:6px">Set efektif 7 hari</div><div class="chips-row wrap">${muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} <span class="num">${num(m.acute)}</span></span>`).join('')}</div></div>` : ''}
     </section>`,
   };
 }
@@ -175,16 +173,16 @@ export function checkinView() {
   return {
     nav: null,
     html: `<section class="page">
-      <div class="page-h"><div><div class="muted-s">Kurang dari 15 detik</div><h1 class="h1">Check-in cepat</h1></div>
+      <div class="page-h"><div><div class="muted-s">Sebelum latihan</div><h1 class="h1">Check-in</h1></div>
         <button class="btn-link" data-act="ci-skip">Lewati</button></div>
       <div class="q"><div class="q-t">Tidur semalam</div>${seg('sleep', ['<5 jam', '5–6', '6–7', '7–8', '>8'])}</div>
       <div class="q"><div class="q-t">Pegal otot</div>${seg('soreness', pain)}</div>
       <div class="q"><div class="q-t">Nyeri sendi</div>${seg('jointPain', pain)}
         ${ci.jointPain <= 3 ? `<div class="chips-row wrap"><span class="muted-s">Bagian mana?</span>${JOINTS.map((j) => `<button class="chip-b ${ci.joints.includes(j) ? 'sel warn' : ''}" data-act="ci-joint" data-v="${j}">${j}</button>`).join('')}</div>` : ''}</div>
       <div class="q"><div class="q-t">Motivasi</div>${seg('motivation', ['1', '2', '3', '4', '5'])}</div>
-      <p class="tiny">Nilai awal diambil dari check-in terakhir. Skala 1–5, 5 berarti terbaik atau tanpa nyeri. Data tetap di perangkat ini.</p>
+      <p class="tiny">Terisi dari check-in terakhir.</p>
       <div class="grow"></div>
-      <button class="btn-primary" data-act="ci-save">SIMPAN</button>
+      <button class="btn-primary" data-act="ci-save">Simpan</button>
     </section>`,
   };
 }
@@ -200,11 +198,11 @@ export function programView() {
     nav: hint ? null : 'program',
     html: `<section class="page">
       ${bar('Program', esc(state.program.name), false)}
-      ${hint ? `<div class="banner soft"><div><b>Sesuaikan gerakanmu</b><div class="muted-s">Ketuk satu hari untuk menambah, menghapus, atau mengurutkan gerakan. Beban awal hanya tebakan, sesuaikan sebelum latihan pertama.</div></div></div>` : ''}
-      ${days.map((d) => `<button class="card tap" data-act="nav" data-to="#/day/${d.id}"><div class="card-h"><b>${esc(d.name)}</b><span class="muted-s">${d.items.length} latihan ›</span></div>
+      ${hint ? `<div class="banner soft"><div><b>Sesuaikan gerakanmu</b><div class="muted-s">Ketuk satu hari untuk mengatur gerakannya. Beban awal hanya perkiraan.</div></div></div>` : ''}
+      ${days.map((d) => `<button class="card tap" data-act="nav" data-to="#/day/${d.id}"><div class="card-h"><b>${esc(d.name)}</b><span class="muted-s num">${d.items.length} ›</span></div>
         <div class="muted-s">${d.items.length ? d.items.slice(0, 3).map((i) => esc(getExercise(i.exId).name)).join(' · ') + (d.items.length > 3 ? ' …' : '') : 'Belum ada gerakan. Ketuk untuk menambah.'}</div></button>`).join('')}
       <button class="btn-ghost" data-act="day-add">+ Tambah hari</button>
-      ${hint ? '<div class="grow"></div><button class="btn-primary" data-act="setup-done">SELESAI, MULAI LATIHAN</button>' : '<button class="btn-ghost" data-act="nav" data-to="#/setup">Ganti program (pilih kerangka lain)</button>'}
+      ${hint ? '<div class="grow"></div><button class="btn-primary" data-act="setup-done">Selesai</button>' : '<button class="btn-ghost" data-act="nav" data-to="#/setup">Ganti kerangka program</button>'}
     </section>`,
   };
 }
@@ -217,7 +215,7 @@ export function setupView() {
       ${first
         ? '<div class="page-h"><div><div class="muted-s">Langkah pertama</div><h1 class="h1">Buat program latihan</h1></div></div>'
         : bar('Ganti program', 'Riwayat latihan tidak dihapus')}
-      <p class="muted-s">Pilih kerangka dulu. Di langkah berikutnya Anda bisa menambah, menghapus, dan mengurutkan gerakan tiap hari.</p>
+      <p class="muted-s">Pilih kerangka. Gerakannya bisa diubah setelah ini.</p>
       ${TEMPLATES.map((t) => `<button class="card tap" data-act="setup-pick" data-id="${t.id}"><div class="card-h"><b>${esc(t.name)}</b><span class="muted-s">${t.id === 'kosong' ? '' : t.build().length + ' hari'}</span></div><div class="muted-s">${esc(t.desc)}</div></button>`).join('')}
       ${first ? '<button class="btn-link" data-act="setup-skip">Lewati, pakai program bawaan</button>' : ''}
     </section>`,
@@ -231,7 +229,7 @@ export function dayView(id) {
     nav: null,
     html: `<section class="page">
       ${bar('Atur hari', esc(state.program.name))}
-      <label class="field"><span class="k">NAMA HARI</span><input id="dayname" type="text" value="${esc(day.name)}" data-in="day-name" data-day="${day.id}"></label>
+      <label class="field"><span class="k">Nama hari</span><input id="dayname" type="text" value="${esc(day.name)}" data-in="day-name" data-day="${day.id}"></label>
       ${day.items.map((it, i) => {
         const ex = getExercise(it.exId);
         return `<div class="card item"><button class="item-main" data-act="nav" data-to="#/item/${day.id}/${i}"><b>${esc(ex.name)}</b>
@@ -275,7 +273,7 @@ export function itemView(dayId, idx) {
       <div class="q"><div class="q-t">Otot yang dihitung</div><div class="chips-row wrap">${ex.muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} · ${num(m.weight)}</span>`).join('') || '<span class="muted-s">-</span>'}</div></div>
       <button class="btn-ghost" data-act="nav" data-to="#/ex/${encodeURIComponent(ex.id)}">Lihat gambar gerakan</button>
       <div class="grow"></div>
-      <button class="btn-primary" data-act="back">SELESAI</button>
+      <button class="btn-primary" data-act="back">Selesai</button>
       <button class="btn-link danger" data-act="item-del" data-day="${dayId}" data-i="${idx}">Hapus gerakan dari hari ini</button>
     </section>`,
   };
@@ -336,7 +334,7 @@ export function pickView(mode) {
     nav: null,
     html: `<section class="page pick">
       ${bar('Pilih gerakan', sub)}
-      <label class="search"><span class="s-ic">${icon('search', 20)}</span><input id="pkq" type="text" inputmode="search" placeholder="Cari gerakan, misal row atau pulldown" value="${esc(pk.q)}" data-in="pk-q"></label>
+      <label class="search"><span class="s-ic">${icon('search', 20)}</span><input id="pkq" type="text" inputmode="search" placeholder="Cari: row, pulldown, dumbel…" value="${esc(pk.q)}" data-in="pk-q"></label>
       <div class="chips-row scroll">
         <button class="chip-b ${pk.group === 'all' ? 'sel acc' : ''}" data-act="pk-group" data-v="all">Semua</button>
         ${GROUPS.map((g) => `<button class="chip-b ${pk.group === g.id ? 'sel acc' : ''}" data-act="pk-group" data-v="${g.id}">${g.label}</button>`).join('')}
@@ -347,13 +345,13 @@ export function pickView(mode) {
       <div class="plist" id="plist">${pickList()}</div>
       ${
         pk.custom
-          ? `<div class="card"><label class="field"><span class="k">NAMA GERAKAN</span><input id="cname" type="text" placeholder="Contoh: Smith Machine Press"></label>
+          ? `<div class="card"><label class="field"><span class="k">Nama gerakan</span><input id="cname" type="text" placeholder="Contoh: Smith Machine Press"></label>
              <div class="row-g"><select id="cmuscle">${Object.entries(MUSCLE_NAMES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
              <select id="cequip">${EQUIPMENT.map((e) => `<option>${e}</option>`).join('')}</select></div>
              <button class="btn-sm wide" data-act="pk-csave">Simpan gerakan</button></div>`
           : `<button class="btn-ghost dashed" data-act="pk-custom">+ Buat gerakan kustom</button>`
       }
-      <button class="btn-primary" id="pkadd" data-act="pk-add" data-mode="${esc(mode)}" ${pk.sel.size ? '' : 'disabled'}>TAMBAH ${pk.sel.size || ''} GERAKAN</button>
+      <button class="btn-primary" id="pkadd" data-act="pk-add" data-mode="${esc(mode)}" ${pk.sel.size ? '' : 'disabled'}>${pk.sel.size ? `Tambah ${pk.sel.size} gerakan` : 'Pilih gerakan'}</button>
     </section>`,
   };
 }
@@ -365,16 +363,16 @@ export function exDetailView(id) {
   const lp = lastPerf(ex.id);
   const a = imgUrl(ex, 0);
   const b = imgUrl(ex, 1);
-  const fig = (u, cap) => `<figure><img src="${u}" crossorigin="anonymous" alt="${cap} ${esc(ex.name)}" onerror="this.closest('figure').classList.add('broken')"><figcaption>${cap}</figcaption></figure>`;
+  const fig = (u, cap) => `<figure><div class="ph"><img src="${u}" crossorigin="anonymous" alt="${cap} ${esc(ex.name)}" onerror="this.closest('figure').classList.add('broken')"></div><figcaption>${cap}</figcaption></figure>`;
   return {
     nav: null,
     html: `<section class="page">
       ${bar(esc(ex.name), esc(ex.equip || 'Gerakan'))}
       ${a ? `<div class="imgs">${fig(a, 'Posisi awal')}${fig(b, 'Posisi akhir')}</div>` : '<div class="card muted-s">Gerakan kustom belum punya gambar.</div>'}
       <div class="q"><div class="q-t">Otot yang dihitung</div><div class="chips-row wrap">${ex.muscles.map((m) => `<span class="chip">${MUSCLE_NAMES[m.muscleId] || m.muscleId} · ${m.weight >= 1 ? 'utama' : 'bantu'}</span>`).join('') || '<span class="muted-s">-</span>'}</div></div>
-      <div class="infocard"><div><div class="k">TIPE</div><div>${ex.compound ? 'Compound' : 'Isolasi'}${ex.level ? ' · ' + (LEVEL[ex.level] || ex.level) : ''}</div></div>
-        <div class="r"><div class="k">TERAKHIR</div><div>${lp ? `${num(lp.load)} kg × ${lp.reps}` : 'belum pernah'}</div></div></div>
-      ${a ? '<p class="tiny">Gambar dari Free Exercise DB (domain publik) dan dimuat dari internet saat dibuka. Yang sudah pernah dilihat tersimpan untuk dibuka tanpa sinyal.</p>' : ''}
+      <div class="infocard"><div><div class="k">Tipe</div><div>${ex.compound ? 'Compound' : 'Isolasi'}${ex.level ? ' · ' + (LEVEL[ex.level] || ex.level) : ''}</div></div>
+        <div class="r"><div class="k">Terakhir</div><div>${lp ? `${num(lp.load)} kg × ${lp.reps}` : 'belum pernah'}</div></div></div>
+      ${a ? '<p class="tiny">Gambar: Free Exercise DB (domain publik).</p>' : ''}
     </section>`,
   };
 }
@@ -388,9 +386,9 @@ let histTab = 'sesi';
 function weekLabel(date, today) {
   const ws = weekStart(date);
   const cur = weekStart(today);
-  if (ws === cur) return 'MINGGU INI';
-  if (ws === addDaysStr(cur, -7)) return 'MINGGU LALU';
-  return 'MINGGU ' + dayShort(ws).toUpperCase();
+  if (ws === cur) return 'Minggu ini';
+  if (ws === addDaysStr(cur, -7)) return 'Minggu lalu';
+  return 'Minggu ' + dayShort(ws);
 }
 
 export function historyView() {
@@ -398,7 +396,7 @@ export function historyView() {
   const list = sessionsDesc();
   let body = '';
   if (histTab === 'sesi') {
-    if (!list.length) body = `<div class="empty"><h2>Belum ada sesi</h2><p>Sesi yang selesai akan muncul di sini.</p></div>`;
+    if (!list.length) body = `<div class="empty"><h2>Halaman log masih kosong</h2><p>Setiap sesi yang disimpan masuk ke sini, dikelompokkan per minggu.</p></div>`;
     else {
       const wk = state.sessions.filter((s) => s.date >= weekStart(today));
       const sets = wk.reduce((t, s) => t + sessionStats(s).workSets, 0);
@@ -406,6 +404,9 @@ export function historyView() {
       body = `<div class="stats3"><div class="stat"><div class="k">Minggu ini</div><div class="v">${wk.length} sesi</div></div>
         <div class="stat"><div class="k">Set kerja</div><div class="v">${sets}</div></div>
         <div class="stat"><div class="k">Volume</div><div class="v">${num(vol / 1000)} t</div></div></div>`;
+      const kc = wk.map(estimateKcal).filter(Boolean);
+      if (kc.length) body += `<div class="tiny">Perkiraan kalori minggu ini: <span class="num">${fmtKcal({ lo: kc.reduce((t, k) => t + k.lo, 0), hi: kc.reduce((t, k) => t + k.hi, 0) })}</span> kkal</div>`;
+      else if (!state.settings.bodyWeightKg) body += `<button class="btn-link inline" data-act="nav" data-to="#/settings">Isi berat badan untuk perkiraan kalori</button>`;
       let last = '';
       for (const s of list) {
         const lbl = weekLabel(s.date, today);
@@ -416,13 +417,13 @@ export function historyView() {
         const st = sessionStats(s);
         const prs = sessionPRs(s);
         body += `<button class="card tap" data-act="nav" data-to="#/ses/${s.id}"><div class="card-h"><b>${esc(s.name)}</b><span class="muted-s">${dayShort(s.date)}</span></div>
-          <div class="muted-s">${fmtDurationMin(s.durationMin)} · ${st.workSets} set · ${fmtThousands(st.volume)} kg</div>
+          <div class="muted-s num">${fmtDurationMin(s.durationMin)} · ${st.workSets} set · ${fmtThousands(st.volume)} kg</div>
           ${prs.length ? `<div class="chips-row"><span class="pr">PR ${esc(getExercise(prs[0].exId).name)} ${num(prs[0].set.load)}×${prs[0].set.reps}${prs.length > 1 ? ` +${prs.length - 1}` : ''}</span></div>` : ''}</button>`;
       }
     }
   } else {
     const ids = [...new Set(state.sessions.flatMap((s) => s.sets.map((t) => t.exId)))];
-    if (!ids.length) body = `<div class="empty"><h2>Belum ada data</h2><p>Grafik per gerakan muncul setelah sesi pertama.</p></div>`;
+    if (!ids.length) body = `<div class="empty"><h2>Belum ada gerakan tercatat</h2><p>Grafik kekuatan tiap gerakan muncul setelah sesi pertama.</p></div>`;
     else {
       body = ids
         .map((id) => {
@@ -461,9 +462,9 @@ export function histExView(exId) {
   return {
     nav: null,
     html: `<section class="page">${bar(esc(ex.name), 'Riwayat gerakan')}
-      ${series.length >= 2 ? `<div class="card"><div class="card-h"><span class="k">e1RM TERBAIK PER SESI</span><span class="muted-s">${num(series[0])} → ${num(series[series.length - 1])} kg</span></div>${spark(series)}</div>` : '<div class="card muted-s">Grafik muncul setelah 2 sesi atau lebih.</div>'}
+      ${series.length >= 2 ? `<div class="card"><div class="card-h"><span class="k">e1RM terbaik per sesi</span><span class="muted-s">${num(series[0])} → ${num(series[series.length - 1])} kg</span></div>${spark(series)}</div>` : '<div class="card muted-s">Grafik muncul setelah 2 sesi atau lebih.</div>'}
       ${rows.map((r) => `<button class="card tap" data-act="nav" data-to="#/ses/${r.s.id}"><div class="card-h"><b>${dayShort(r.s.date)}</b><span class="muted-s">${r.w.length} set</span></div>
-        <div class="setchips">${r.w.map((t) => `<span class="setchip ${t.confirmed ? '' : 'unc'}">${num(t.load)} × ${t.reps}${t.rir != null ? ' · RIR ' + t.rir : ''}</span>`).join('')}</div></button>`).join('')}
+        ${setTable(r.w, { tut: false })}</button>`).join('')}
     </section>`,
   };
 }
@@ -489,21 +490,73 @@ export function summaryView(id) {
       ${bar(esc(s.name), `${dayLong(s.date)} · sesi selesai`)}
       <div class="stats3"><div class="stat"><div class="k">Durasi</div><div class="v">${fmtDurationMin(s.durationMin)}</div></div>
         <div class="stat"><div class="k">Set kerja</div><div class="v">${st.workSets}</div></div>
-        <div class="stat"><div class="k">Volume</div><div class="v">${fmtThousands(st.volume)} kg</div></div></div>
+        <div class="stat"><div class="k">Volume (kg)</div><div class="v">${fmtThousands(st.volume)}</div></div></div>
       ${prs.map((p) => `<div class="banner good">${icon('trophy', 22)}<div><b>PR baru</b> · ${esc(getExercise(p.exId).name)} ${num(p.set.load)} kg × ${p.set.reps}</div></div>`).join('')}
-      <div class="stats3 two"><div class="stat"><div class="k">Rata-rata TUT per set</div><div class="v work">${st.avgTut != null ? fmtClock(st.avgTut) : '-'}</div></div>
-        <div class="stat"><div class="k">Rata-rata jeda</div><div class="v rest">${st.avgRest != null ? fmtClock(st.avgRest) : '-'}</div></div></div>
+      <div class="stats3 two"><div class="stat"><div class="k">Waktu per set</div><div class="v work">${st.avgTut != null ? fmtClock(st.avgTut) : '-'}</div></div>
+        <div class="stat"><div class="k">Jeda rata-rata</div><div class="v rest">${st.avgRest != null ? fmtClock(st.avgRest) : '-'}</div></div>
+        <div class="stat"><div class="k">Kalori (kkal)</div><div class="v">${estimateKcal(s) ? fmtKcal(estimateKcal(s)) : '–'}</div></div></div>
+      ${estimateKcal(s) ? '<div class="tiny">Kalori hanya perkiraan kasar dari berat badan, durasi, dan RPE sesi (bisa meleset 30–50%).</div>' : '<button class="btn-link inline" data-act="nav" data-to="#/settings">Isi berat badan untuk perkiraan kalori</button>'}
       ${byEx.map((g) => `<div class="card"><div class="card-h"><b>${esc(getExercise(g.exId).name)}</b><span class="muted-s">${g.sets.length} set · ${fmtThousands(g.sets.reduce((a, t) => a + t.load * t.reps, 0))} kg</span></div>
-        <div class="setchips">${g.sets.map((t) => `<span class="setchip ${t.confirmed ? '' : 'unc'}">${num(t.load)} × ${t.reps}${t.rir != null ? ' · RIR ' + t.rir : ''}${t.tut != null ? ' · ' + fmtClock(t.tut) : ''}${t.type === 'warmup' ? ' · WU' : t.type === 'drop' ? ' · drop' : ''}${t.confirmed ? '' : ' •'}</span>`).join('')}</div></div>`).join('')}
-      ${st.unconfirmed ? `<div class="note">• ${st.unconfirmed} set belum dikonfirmasi (nilai tebakan). Tidak dipakai untuk menghitung RIR drift.</div>` : ''}
-      <div class="card row-card"><div><div class="k">FATIGUE PADA HARI SESI</div><div class="big ${lv.cls}">${Math.round(sys)} <span class="muted-s">${lv.label}${top.length ? ' · ' + top.map((m) => `${MUSCLE_NAMES[m.muscleId] || m.muscleId} ${Math.round(m.fatigue)}`).join(' · ') : ''}</span></div></div>
+        ${setTable(g.sets, { editSid: s.id })}</div>`).join('')}
+      ${st.unconfirmed ? `<div class="tiny">Baris redup: ${st.unconfirmed} set belum dikonfirmasi, RIR-nya tidak dihitung.</div>` : ''}
+      <div class="card row-card"><div><div class="k">Fatigue hari itu</div><div class="big ${lv.cls}">${Math.round(sys)} <span class="muted-s">${lv.label}${top.length ? ' · ' + top.map((m) => `${MUSCLE_NAMES[m.muscleId] || m.muscleId} ${Math.round(m.fatigue)}`).join(' · ') : ''}</span></div></div>
         <button class="btn-link" data-act="nav" data-to="#/fatigue">Mengapa?</button></div>
       ${s.rpe ? `<div class="muted-s">RPE sesi: ${s.rpe}</div>` : ''}
+      <p class="tiny">Ketuk satu baris set untuk mengoreksi beban, reps, atau RIR.</p>
       <button class="btn-link danger" data-act="ses-del" data-id="${s.id}">${pendingSesDel === s.id ? 'Ketuk lagi untuk menghapus sesi ini' : 'Hapus sesi'}</button>
+      ${histSheet(s)}
     </section>`,
   };
 }
 let pendingSesDel = null;
+
+// Koreksi set pada sesi yang sudah tersimpan.
+let hs = null;
+let hsFresh = false;
+const hsSet = () => {
+  if (!hs) return null;
+  const s = state.sessions.find((x) => x.id === hs.sid);
+  const t = s && s.sets.find((x) => x.id === hs.id);
+  return t ? { s, t } : null;
+};
+function histSheet(s) {
+  const f = hsSet();
+  if (!f || f.s.id !== s.id) return '';
+  const { t } = f;
+  const typeLbl = { working: 'Set kerja', warmup: 'Pemanasan', drop: 'Drop set' }[t.type];
+  const rirSel = t.rir ?? t.targetRir ?? 2;
+  const chips = [0, 1, 2, 3, 4, 5].map((v) => `<button class="chip-b ${t.rir != null && rirSel === v ? 'sel' : ''}" data-act="hs-rir" data-v="${v}">${v === 5 ? '5+' : v}</button>`).join('');
+  const fresh = hsFresh ? ' fresh' : '';
+  hsFresh = false;
+  return `<div class="menu-bg${fresh}" data-act="hs-close"></div>
+    <div class="menu${fresh}" role="dialog" aria-label="Koreksi set">
+      <div class="grip"></div>
+      <div class="sheet-h"><b>${esc(getExercise(t.exId).name)}</b>${t.tut != null ? `<span class="tutc">${fmtClock(t.tut)}</span>` : ''}</div>
+      <div class="stp-pair sm" style="margin:10px 0">
+        ${stepper('Beban (kg)', num(t.load), 'hs-load-', 'hs-load+', 'hs-load-set')}
+        ${stepper('Reps', String(t.reps), 'hs-reps-', 'hs-reps+', 'hs-reps-set')}
+      </div>
+      <div class="muted-s" style="margin-bottom:6px">Sisa rep (RIR)</div>
+      <div class="chips-row">${chips}</div>
+      <div class="row-g" style="margin:10px 0"><button class="btn-sm wide" data-act="hs-type">${typeLbl} ▾</button><button class="btn-sm" data-act="hs-del">Hapus set</button></div>
+      <button class="btn-primary" data-act="hs-close">Selesai</button>
+    </div>`;
+}
+const hsChange = (fn) => {
+  const f = hsSet();
+  if (!f) return;
+  fn(f.t);
+  save();
+  rerender();
+};
+const hsStep = (v, dir) => {
+  const step = (dir > 0 ? v : v - 0.01) < 20 ? 1 : 2.5;
+  return Math.max(0, Math.round((v + dir * step) * 2) / 2);
+};
+const hsNum = (v) => {
+  const n = parseFloat(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+};
 
 // ---------------------------------------------------------------------------
 // Fatigue & deload
@@ -525,9 +578,9 @@ function deloadCard(an, today) {
   const title = { ok: 'Tidak ada pemicu deload', watch: 'Waspada', deload: `Deload disarankan${d.durationDays ? ' · ' + d.durationDays + ' hari' : ''}` }[d.status];
   return `<div class="card"><div class="card-h"><b>${title}</b><span class="muted-s">${d.coreTriggerCount} dari 4 pemicu reaktif</span></div>
     <div class="trigs">${trig}</div>
-    ${d.status === 'deload' ? `<div class="infocard one"><div><div class="k">USULAN · TIPE ${d.type === 'intensity' ? 'INTENSITAS' : 'VOLUME'}</div><div>${rx}</div></div></div>
+    ${d.status === 'deload' ? `<div class="infocard one"><div><div class="k">Usulan · tipe ${d.type === 'intensity' ? 'intensitas' : 'volume'}</div><div>${rx}</div></div></div>
       ${hidden ? '<div class="muted-s">Peringatan ditunda atau diabaikan sementara.</div>' : ''}
-      <div class="row-g"><button class="btn-primary flex" data-act="dl-accept">TERIMA</button></div>
+      <div class="row-g"><button class="btn-primary flex" data-act="dl-accept">Mulai deload</button></div>
       <div class="row-g"><button class="btn-sm wide" data-act="dl-snooze" data-n="3">Tunda 3 hari</button><button class="btn-sm wide" data-act="dl-snooze" data-n="7">Tunda 1 minggu</button><button class="btn-sm wide" data-act="dl-ignore">Abaikan</button></div>`
       : `<p class="muted-s">${esc(d.message)}</p>`}
   </div>`;
@@ -538,8 +591,8 @@ export function fatigueView() {
   if (!hasTrainingData()) {
     return {
       nav: 'fatigue',
-      html: `<section class="page">${bar('Fatigue', '', false)}<div class="empty"><h2>Belum ada data</h2><p>Skor fatigue dihitung dari set yang dicatat dan check-in harian. Selesaikan satu sesi untuk mulai.</p>
-        <button class="btn-primary" data-act="nav" data-to="#/today">Ke Hari Ini</button></div></section>`,
+      html: `<section class="page">${bar('Fatigue', '', false)}<div class="empty"><h2>Skor muncul setelah sesi pertama</h2><p>Dihitung per otot dari set yang dicatat dan check-in harian.</p>
+        <div class="ghost-rows">${['Dada', 'Punggung', 'Paha depan', 'Bahu'].map((m) => `<div><span>${m}</span><i></i><b>–</b></div>`).join('')}</div></div></section>`,
     };
   }
   const an = analyzeAt(today);
@@ -553,22 +606,22 @@ export function fatigueView() {
   const hist = an.history.map((h) => h.score);
   return {
     nav: 'fatigue',
-    html: `<section class="page">${bar('Fatigue', 'Estimasi dari data latihan dan check-in', false)}
-      <div class="card"><div class="fat-top"><div><div class="k">FATIGUE SISTEMIK</div><div class="score">${Math.round(sys)}</div></div><span class="lvl ${lv.cls}">${lv.label}</span></div>
+    html: `<section class="page">${bar('Fatigue', 'Perkiraan, bukan diagnosis', false)}
+      <div class="card"><div class="fat-top"><div><div class="k">Fatigue sistemik</div><div class="score">${Math.round(sys)}</div></div><span class="lvl ${lv.cls}">${lv.label}</span></div>
         <div class="gauge">${[0, 1, 2, 3, 4].map((i) => `<i class="${i < segN ? (i >= 3 ? 'warn' : 'on') : ''}"></i>`).join('')}</div>
-        <div class="bar-scale"><span>0 rendah</span><span>70 ambang tinggi</span><span>100</span></div>
+        <div class="bar-scale"><span>0</span><span>70 ambang</span><span>100</span></div>
         ${lowConf ? '<p class="tiny">Riwayat masih di bawah 14 hari: skor memakai baseline default dan kepercayaannya rendah.</p>' : ''}</div>
-      <div class="sec">PER OTOT</div>
+      <div class="sec">Per otot</div>
       <div class="mus">${muscles.map((m) => {
         const l = level(m.fatigue);
         return `<button class="mrow ${sel && sel.muscleId === m.muscleId ? 'sel' : ''}" data-act="fat-muscle" data-v="${m.muscleId}"><span class="mn">${MUSCLE_NAMES[m.muscleId] || m.muscleId}</span>
           <span class="mbar"><i class="${l.cls}" style="width:${Math.min(100, m.fatigue)}%"></i></span><span class="mv">${Math.round(m.fatigue)}</span></button>`;
       }).join('')}</div>
-      ${hist.length > 1 ? `<div class="card"><div class="card-h"><span class="k">TREN 7 HARI</span><span class="muted-s">ambang 70</span></div>${spark(hist, { threshold: 70, min: 0, max: 100 })}</div>` : ''}
+      ${hist.length > 1 ? `<div class="card"><div class="card-h"><span class="k">Tren 7 hari</span><span class="muted-s">ambang 70</span></div>${spark(hist, { threshold: 70, min: 0, max: 100 })}</div>` : ''}
       ${sel ? `<div class="card"><b>Mengapa ${MUSCLE_NAMES[sel.muscleId] || sel.muscleId} ${Math.round(sel.fatigue)}?</b>
         <div class="why">${sel.explanation.components.map((c) => `<div class="li"><span>${esc(c.name)}</span><span class="v">${c.value}${c.contribution !== undefined ? ` <span class="muted">→ ${num(c.contribution, 1)}</span>` : ''}</span></div>`).join('')}</div>
         <p class="tiny">${esc(sel.explanation.caveats?.[0] || '')}</p></div>` : ''}
-      <div class="sec">DELOAD</div>
+      <div class="sec">Deload</div>
       ${deloadCard(an, today)}
       <p class="tiny">Estimasi heuristik berdasarkan data Anda, bukan saran medis. Keputusan akhir ada di Anda.</p>
     </section>`,
@@ -598,10 +651,12 @@ export function settingsView() {
         ${sw('countdown', 'Detak 3 detik terakhir', 'Tiga bunyi pendek sebelum jeda habis')}
         <div class="srow"><div><div>Tes bunyi</div><div class="muted-s">Coba dengan tombol senyap menyala dan mati</div></div><button class="btn-sm" data-act="sound-test">Putar</button></div>
         ${sw('wakeLock', 'Jaga layar tetap menyala saat sesi', 'Agar timer dan bunyi tetap berjalan')}
+        <div class="srow"><div><div>Berat badan</div><div class="muted-s">Untuk perkiraan kalori (kg)</div></div>
+          <input class="num-in" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" placeholder="–" value="${s.bodyWeightKg ? num(s.bodyWeightKg) : ''}" data-change="set-weight" aria-label="Berat badan dalam kg"></div>
         <div class="srow"><div><div>Jadwal deload proaktif</div><div class="muted-s">Tiap berapa minggu (4–8)</div></div>
           <div class="stp-row"><button class="sb" data-act="set-interval" data-d="-1" aria-label="Kurangi">−</button><span class="stp-val sm">${s.deloadIntervalWeeks}</span><button class="sb" data-act="set-interval" data-d="1" aria-label="Tambah">+</button></div></div>
       </div>
-      <div class="sec">DATA</div>
+      <div class="sec">Data</div>
       <div class="card">
         <p class="muted-s">Semua data tersimpan di perangkat ini. Buat cadangan berkala, karena Safari dapat menghapus data situs yang lama tidak dibuka.</p>
         <div class="row-g"><button class="btn-sm wide" data-act="data-export">Ekspor cadangan</button>
@@ -628,6 +683,7 @@ export function resetDrafts() {
   pk = null;
   pendingDel = null;
   pendingSesDel = null;
+  hs = null;
   confirmReset = null;
 }
 
@@ -652,6 +708,50 @@ function newItemFor(exId) {
 }
 
 onMany({
+  'hs-edit': (el) => {
+    hs = { sid: el.dataset.sid, id: el.dataset.id };
+    hsFresh = true;
+    rerender();
+  },
+  'hs-close': () => {
+    hs = null;
+    rerender();
+  },
+  'hs-load-': () => hsChange((t) => { t.load = hsStep(t.load, -1); }),
+  'hs-load+': () => hsChange((t) => { t.load = hsStep(t.load, 1); }),
+  'hs-reps-': () => hsChange((t) => { t.reps = Math.max(1, t.reps - 1); }),
+  'hs-reps+': () => hsChange((t) => { t.reps += 1; }),
+  'hs-load-set': (el) => hsChange((t) => {
+    const n = hsNum(el.value);
+    if (n !== null) t.load = Math.min(999, Math.max(0, Math.round(n * 10) / 10));
+  }),
+  'hs-reps-set': (el) => hsChange((t) => {
+    const n = hsNum(el.value);
+    if (n !== null) t.reps = Math.min(99, Math.max(1, Math.round(n)));
+  }),
+  'hs-rir': (el) => hsChange((t) => {
+    t.rir = Number(el.dataset.v);
+    t.confirmed = true;
+  }),
+  'hs-type': () => hsChange((t) => {
+    const order = ['working', 'warmup', 'drop'];
+    t.type = order[(order.indexOf(t.type) + 1) % order.length];
+  }),
+  'hs-del': () => {
+    const f = hsSet();
+    if (!f) return;
+    f.s.sets = f.s.sets.filter((x) => x.id !== f.t.id);
+    hs = null;
+    if (!f.s.sets.length) {
+      state.sessions = state.sessions.filter((x) => x.id !== f.s.id);
+      save();
+      navigate('#/history');
+      return;
+    }
+    save();
+    rerender();
+    toast('Set dihapus');
+  },
   'setup-pick': (el) => {
     state.program = programFromTemplate(el.dataset.id);
     state.lastDayId = null;
@@ -792,7 +892,7 @@ onMany({
     document.getElementById('plist').innerHTML = pickList();
     const b = document.getElementById('pkadd');
     b.disabled = !pk.sel.size;
-    b.textContent = `TAMBAH ${pk.sel.size || ''} GERAKAN`;
+    b.textContent = pk.sel.size ? `Tambah ${pk.sel.size} gerakan` : 'Pilih gerakan';
   },
   'pk-custom': () => {
     pk.custom = true;
@@ -878,6 +978,13 @@ onMany({
   'set-toggle': (el) => {
     state.settings[el.dataset.k] = !state.settings[el.dataset.k];
     save();
+    rerender();
+  },
+  'set-weight': (el) => {
+    const n = parseFloat(String(el.value).replace(',', '.'));
+    state.settings.bodyWeightKg = Number.isFinite(n) && n >= 25 && n <= 300 ? Math.round(n * 10) / 10 : null;
+    save();
+    if (el.value && !state.settings.bodyWeightKg) toast('Isi berat badan antara 25 dan 300 kg');
     rerender();
   },
   'set-interval': (el) => {

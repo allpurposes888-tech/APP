@@ -1,10 +1,10 @@
-// Membuat ikon PNG aplikasi tanpa dependensi: lingkaran oranye + segitiga "play" gelap di atas latar gelap.
+// Membuat ikon PNG aplikasi tanpa dependensi: piringan beban kuning di atas latar hitam hangat.
 import { deflateSync, crc32 } from 'node:zlib';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-const BG = [0x12, 0x16, 0x1c];
-const ACC = [0xff, 0x7a, 0x45];
-const DARK = [0x1a, 0x0e, 0x08];
+const BG = [0x0e, 0x0d, 0x0c];
+const ACC = [0xf2, 0xd5, 0x44];
+const DARK = [0x1a, 0x16, 0x00];
 
 function inTriangle(px, py, a, b, c) {
   const s = (p1, p2, p3) => (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1]);
@@ -17,12 +17,13 @@ function inTriangle(px, py, a, b, c) {
 
 function pixel(u, v) {
   // u, v dalam [0,1]
-  const cx = 0.5, cy = 0.5, r = 0.32;
-  if ((u - cx) ** 2 + (v - cy) ** 2 <= r * r) {
-    const a = [0.43, 0.36], b = [0.43, 0.64], c = [0.66, 0.5];
-    return inTriangle(u, v, a, b, c) ? DARK : ACC;
-  }
-  return BG;
+  // Piringan beban kuning (15 kg) dilihat dari depan: bibir luar, alur tipis, lubang tengah.
+  const d = Math.hypot(u - 0.5, v - 0.5);
+  if (d > 0.36) return BG;
+  if (d < 0.075) return BG;
+  if (d < 0.12) return ACC;
+  if (Math.abs(d - 0.27) < 0.012) return DARK;
+  return ACC;
 }
 
 function png(size) {

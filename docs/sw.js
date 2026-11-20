@@ -1,5 +1,5 @@
 // Service worker: aplikasi bisa dibuka offline. Naikkan VERSION setiap kali berkas aplikasi berubah.
-const VERSION = 'v4';
+const VERSION = 'v7';
 const CACHE = `gym-hipertrofi-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'ui.js', 'util.js', 'store.js', 'catalog.js', 'device.js',

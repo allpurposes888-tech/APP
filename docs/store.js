@@ -8,7 +8,7 @@ export function defaults() {
   return {
     v: 2,
     createdAt: localDate(),
-    settings: { sound: true, volume: 'sedang', countdown: true, wakeLock: true, deloadIntervalWeeks: 6 },
+    settings: { sound: true, volume: 'sedang', countdown: true, wakeLock: true, deloadIntervalWeeks: 6, bodyWeightKg: null },
     setupDone: false,
     setupHint: false,
     program: defaultProgram(),

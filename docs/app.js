@@ -42,9 +42,9 @@ function navHtml(active) {
   const item = (k, ic, label) =>
     `<button class="nv ${active === k ? 'on' : ''}" data-act="nav" data-to="#/${k}" ${active === k ? 'aria-current="page"' : ''}>${icon(ic)}<span>${label}</span></button>`;
   return `<nav class="nav" aria-label="Navigasi utama">
-    ${item('today', 'home', 'Hari Ini')}
+    ${item('today', 'home', 'Hari ini')}
     ${item('program', 'list', 'Program')}
-    <button class="nv center ${active === 'latih' ? 'on' : ''}" data-act="nav-latih" aria-label="Latih"><span class="orb">${icon('play', 22)}</span><span>Latih</span></button>
+    <button class="nv center ${active === 'latih' ? 'on' : ''}" data-act="nav-latih" aria-label="Latih"><span class="orb">${icon('play', 18)}</span><span>Latih</span></button>
     ${item('history', 'clock', 'Riwayat')}
     ${item('fatigue', 'pulse', 'Fatigue')}
   </nav>`;

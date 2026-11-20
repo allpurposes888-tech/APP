@@ -80,3 +80,16 @@ export function fmtDurationMin(min) {
 
 export const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 export const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+
+/** Tabel set ala buku log (ringkasan sesi, akhir sesi, riwayat gerakan). */
+export function setTable(sets, { tut = true, editSid = null } = {}) {
+  let w = 0;
+  const rows = sets
+    .map((t) => {
+      const lbl = t.type === 'working' ? String(++w) : t.type === 'warmup' ? 'P' : 'D';
+      const rir = t.rir != null ? (t.rir >= 5 ? '5+' : t.rir) : '–';
+      return `<tr class="${t.confirmed ? 'done' : 'unc'} ${t.type === 'working' ? '' : 'wu'}${editSid ? ' tap' : ''}"${editSid ? ` data-act="hs-edit" data-sid="${editSid}" data-id="${t.id}"` : ''}><td>${lbl}</td><td>${num(t.load)}</td><td>${t.reps}</td><td>${rir}</td>${tut ? `<td class="prev">${t.tut != null ? fmtClock(t.tut) : '–'}</td>` : ''}</tr>`;
+    })
+    .join('');
+  return `<table class="log compact"><thead><tr><th>Set</th><th>Kg</th><th>Reps</th><th>RIR</th>${tut ? '<th>Waktu</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>`;
+}
